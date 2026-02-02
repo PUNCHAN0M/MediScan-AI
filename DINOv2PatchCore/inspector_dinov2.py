@@ -1,10 +1,15 @@
-# core_predict/inspector.py
+# DINOv2PatchCore/inspector_dinov2.py
 """
-PillInspector - Main inspection class with vote accumulation.
+DINOv2 PillInspector - Main inspection class with vote accumulation.
+
+Same functionality as MobileNet version but uses DINOv2 backbone for:
+- Better texture discrimination
+- Better color differentiation
+- Superior anomaly detection
 
 Single Responsibility:
 - Detect pills using YOLO
-- Classify anomalies using PatchCore
+- Classify anomalies using DINOv2-based PatchCore
 - Accumulate votes across frames
 - Summarize with majority vote
 """
@@ -18,36 +23,35 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Sequence, Any
 
-from core_shared import PatchCore
-from core_predict.yolo_detector import PillYOLODetector
-from core_predict.visualizer import draw_pill_results, draw_summary
+from .core_dinov2 import DINOv2PatchCore
 
 
 # =========================================================
 # CONFIGURATION
 # =========================================================
 @dataclass
-class InspectorConfig:
-    """Configuration for PillInspector."""
+class DINOv2InspectorConfig:
+    """Configuration for DINOv2-based PillInspector."""
     
     compare_classes: List[str] = field(default_factory=lambda: [
         "vitaminc_front", "vitaminc_back",
-        "white_front", "white_back",
     ])
     
-    model_dir: Path = field(default_factory=lambda: Path("./model/patchcore"))  # โฟลเดอร์ .pth แยกแต่ละ class
+    model_dir: Path = field(default_factory=lambda: Path("./model/patchcore_dinov2"))
     yolo_model_path: str = "model/yolo12-seg.pt"
-    yolo_det_model_path: Optional[str] = None  # None = ไม่ใช้ separate detection model
+    yolo_det_model_path: Optional[str] = None
     device: Optional[str] = None
     
-    # PatchCore
-    model_size: int = 512
-    grid_size: int = 14
-    k_nearest: int = 5
+    # DINOv2 PatchCore
+    model_size: int = 252  # Must be divisible by 14 (DINOv2 patch size)
+    grid_size: int = 18    # DINOv2 outputs 18x18 patches for 252x252 input
+    k_nearest: int = 19
+    backbone_size: str = "small"  # "small", "base", "large"
+    multi_scale: bool = True
     
     # YOLO
     img_size: int = 512
-    conf: float = 0.38
+    conf: float = 0.5
     iou: float = 0.6
     pad: int = 5
     merge_dist_px: int = 60
@@ -57,7 +61,7 @@ class InspectorConfig:
     track_iou_threshold: float = 0.80
     track_max_age: int = 10
     
-    crop_size: int = 512
+    crop_size: int = 252  # Must be divisible by 14
 
     def __post_init__(self):
         if self.device is None:
@@ -68,7 +72,7 @@ class InspectorConfig:
 # =========================================================
 # UTILITY
 # =========================================================
-def make_square_crop(crop: np.ndarray, target_size: int = 224) -> np.ndarray:
+def make_square_crop(crop: np.ndarray, target_size: int = 252) -> np.ndarray:
     """Pad crop to square and resize."""
     if crop.size == 0:
         return np.zeros((target_size, target_size, 3), dtype=np.uint8)
@@ -91,59 +95,127 @@ def make_square_crop(crop: np.ndarray, target_size: int = 224) -> np.ndarray:
 
 
 # =========================================================
+# VISUALIZER (simplified, can import from core_predict)
+# =========================================================
+COLOR_NORMAL = (0, 255, 0)    # Green
+COLOR_ANOMALY = (0, 0, 255)   # Red
+COLOR_UNKNOWN = (128, 128, 128)
+
+
+def draw_pill_results(frame: np.ndarray, results: List[Dict[str, Any]]) -> np.ndarray:
+    """Draw bounding boxes and status on frame."""
+    vis = frame.copy()
+    
+    for r in results:
+        bbox = r.get("bbox", (0, 0, 0, 0))
+        status = r.get("status", "UNKNOWN")
+        tid = r.get("id", -1)
+        
+        color = COLOR_NORMAL if status == "NORMAL" else COLOR_ANOMALY if status == "ANOMALY" else COLOR_UNKNOWN
+        
+        x1, y1, x2, y2 = map(int, bbox)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        
+        label = f"ID:{tid} {status}"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(vis, (x1, y1 - th - 6), (x1 + tw + 4, y1), color, -1)
+        cv2.putText(vis, label, (x1 + 2, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    return vis
+
+
+def draw_summary(frame: np.ndarray, items: List[Dict[str, Any]]) -> np.ndarray:
+    """Draw summary results on frame."""
+    vis = frame.copy()
+    
+    for item in items:
+        bbox = item.get("bbox", (0, 0, 0, 0))
+        status = item.get("status", "UNKNOWN")
+        tid = item.get("id", -1)
+        votes = item.get("votes", {})
+        
+        color = COLOR_NORMAL if status == "NORMAL" else COLOR_ANOMALY
+        
+        x1, y1, x2, y2 = map(int, bbox)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 3)
+        
+        label = f"ID:{tid} {status}"
+        vote_str = f"N:{votes.get('NORMAL', 0)} A:{votes.get('ANOMALY', 0)}"
+        
+        cv2.putText(vis, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        cv2.putText(vis, vote_str, (x1, y2 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+    
+    return vis
+
+
+# =========================================================
 # INSPECTOR
 # =========================================================
-class PillInspector:
+class DINOv2PillInspector:
     """
-    Pill anomaly inspector with frame-based vote accumulation.
+    DINOv2-based Pill anomaly inspector with frame-based vote accumulation.
     
     Usage:
-        inspector = PillInspector()
+        inspector = DINOv2PillInspector()
         for frame in frames:
             preview = inspector.classify_anomaly(frame)
         result = inspector.summarize()
     """
     
-    def __init__(self, config: Optional[InspectorConfig] = None):
-        self.config = config or InspectorConfig()
+    def __init__(self, config: Optional[DINOv2InspectorConfig] = None):
+        self.config = config or DINOv2InspectorConfig()
         self._init_models()
         self._init_state()
     
     def _init_models(self) -> None:
         cfg = self.config
         
-        # PatchCore
-        self._patchcore = PatchCore(
+        # DINOv2 PatchCore
+        self._patchcore = DINOv2PatchCore(
             model_size=cfg.model_size,
             grid_size=cfg.grid_size,
             k_nearest=cfg.k_nearest,
             device=cfg.device,
+            backbone_size=cfg.backbone_size,
+            multi_scale=cfg.multi_scale,
         )
         
         # Load individual class models (lazy loading)
         self._model_dir = cfg.model_dir
-        self._model_data: Dict[str, Any] = {}  # จะโหลดเมื่อต้องการใช้
-        self._subclass_map: Dict[str, List[str]] = {}  # parent -> [subclasses]
+        self._model_data: Dict[str, Any] = {}
+        self._subclass_map: Dict[str, List[str]] = {}
         
         # FAISS indices (lazy loaded)
         self._indices: Dict[str, faiss.Index] = {}
         self._thresholds: Dict[str, float] = {}
         
-        # YOLO detector
-        self._detector = PillYOLODetector(
-            seg_model_path=cfg.yolo_model_path,
-            det_model_path=cfg.yolo_det_model_path,
-            img_size=cfg.img_size,
-            conf=cfg.conf,
-            iou=cfg.iou,
-            pad=cfg.pad,
-            merge_dist_px=cfg.merge_dist_px,
-            enable_tracking=True,
-            track_max_distance=cfg.track_max_distance,
-            track_iou_threshold=cfg.track_iou_threshold,
-            track_max_age=cfg.track_max_age,
-            start_with_detection=cfg.yolo_det_model_path is not None,
-        )
+        # YOLO detector (import from core_predict or create minimal version)
+        self._detector = None
+        self._init_detector()
+    
+    def _init_detector(self) -> None:
+        """Initialize YOLO detector."""
+        try:
+            from MobilenetPatchCore.core_predict.yolo_detector import PillYOLODetector
+            
+            cfg = self.config
+            self._detector = PillYOLODetector(
+                seg_model_path=cfg.yolo_model_path,
+                det_model_path=cfg.yolo_det_model_path,
+                img_size=cfg.img_size,
+                conf=cfg.conf,
+                iou=cfg.iou,
+                pad=cfg.pad,
+                merge_dist_px=cfg.merge_dist_px,
+                enable_tracking=True,
+                track_max_distance=cfg.track_max_distance,
+                track_iou_threshold=cfg.track_iou_threshold,
+                track_max_age=cfg.track_max_age,
+                start_with_detection=cfg.yolo_det_model_path is not None,
+            )
+        except ImportError as e:
+            print(f"[Warning] Failed to import YOLO detector: {e}")
+            self._detector = None
     
     def _init_state(self) -> None:
         self._votes: Dict[int, Dict[str, Any]] = {}
@@ -159,11 +231,9 @@ class PillInspector:
         
         parent_dir = self._model_dir / parent_class
         if parent_dir.is_dir():
-            # โฟลเดอร์ parent มี subclass .pth files
             subclasses = [f.stem for f in parent_dir.glob("*.pth")]
             self._subclass_map[parent_class] = subclasses
         else:
-            # ไม่มีโฟลเดอร์ parent, ลองหา .pth ตรงๆ (fallback)
             pth_path = self._model_dir / f"{parent_class}.pth"
             if pth_path.exists():
                 self._subclass_map[parent_class] = [parent_class]
@@ -177,13 +247,10 @@ class PillInspector:
         if subclass_name in self._indices:
             return True
         
-        # โหลด model data ถ้ายังไม่ได้โหลด
         if subclass_name not in self._model_data:
-            # ลองหาใน parent folder ก่อน
             if parent_class:
                 pth_path = self._model_dir / parent_class / f"{subclass_name}.pth"
             else:
-                # ลองหาจากชื่อ subclass (เช่น vitaminc_front -> vitaminc folder)
                 parts = subclass_name.rsplit("_", 1)
                 if len(parts) == 2:
                     pth_path = self._model_dir / parts[0] / f"{subclass_name}.pth"
@@ -191,7 +258,6 @@ class PillInspector:
                     pth_path = self._model_dir / f"{subclass_name}.pth"
             
             if not pth_path.exists():
-                # Fallback: ลองหา .pth ตรงๆ
                 pth_path = self._model_dir / f"{subclass_name}.pth"
             
             if not pth_path.exists():
@@ -231,11 +297,9 @@ class PillInspector:
         scores: Dict[str, float] = {}
         normal_from: List[str] = []
         
-        # Expand parent classes to subclasses
         for parent_cls in classes:
             subclasses = self._get_subclasses(parent_cls)
             if not subclasses:
-                # Fallback: try as direct subclass name
                 if self._ensure_index(parent_cls):
                     subclasses = [parent_cls]
                 else:
@@ -255,7 +319,8 @@ class PillInspector:
     def reset(self) -> None:
         """Clear all votes and tracking."""
         self._init_state()
-        self._detector.reset_tracking()
+        if self._detector:
+            self._detector.reset_tracking()
     
     def classify_anomaly(
         self,
@@ -270,6 +335,20 @@ class PillInspector:
         classes = list(class_names or self.config.compare_classes)
         self._last_frame = frame.copy()
         
+        if self._detector is None:
+            # No detector, classify entire frame
+            square = make_square_crop(frame, self.config.crop_size)
+            status, scores, normal_from = self._classify_single(square, classes)
+            self._last_results = [{
+                "id": 0,
+                "bbox": (0, 0, frame.shape[1], frame.shape[0]),
+                "conf": 1.0,
+                "status": status,
+                "class_scores": scores,
+                "normal_from": normal_from,
+            }]
+            return draw_pill_results(self._last_frame, self._last_results)
+        
         # Switch to segmentation mode after first detection
         if not self._first_detection_done:
             print(f"[MODE] Using {self._detector.current_mode} mode for initial crop")
@@ -278,7 +357,6 @@ class PillInspector:
         
         crops, infos = self._detector.detect_and_crop(frame)
         
-        # Mark first detection as done if we got any crops
         if crops and not self._first_detection_done:
             self._first_detection_done = True
             print("[MODE] First detection completed, will switch to SEGMENTATION on next frame")
@@ -292,7 +370,6 @@ class PillInspector:
             bbox = tuple(map(int, info.get("padded_region", (0, 0, 0, 0))))
             
             square = make_square_crop(crop, self.config.crop_size)
-
             status, scores, normal_from = self._classify_single(square, classes)
             
             if tid >= 0:
@@ -379,7 +456,3 @@ class PillInspector:
     @property
     def anomaly_counts(self) -> Dict[int, int]:
         return {tid: v.get("ANOMALY", 0) for tid, v in self._votes.items()}
-    
-    @property
-    def detector(self) -> PillYOLODetector:
-        return self._detector

@@ -6,40 +6,27 @@
 - คำนวณ threshold จากภาพ good ใน test set
 - บันทึกทุก class รวมกันในไฟล์ .pth เดียว (แนะนำสำหรับหลายร้อย class+)
 """
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import torch
 import numpy as np
-from pathlib import Path
 from datetime import datetime
 
-from core_shared import PatchCore
-from core_train import PatchCoreTrainer
+from MobilenetPatchCore.core_shared.patchcore import PatchCore
+from MobilenetPatchCore.core_train.trainer import PatchCoreTrainer
+from config import (
+    IMG_SIZE, GRID_SIZE, CORESET_RATIO, K_NEAREST, FALLBACK_THRESHOLD,
+    DATA_ROOT, MODEL_OUTPUT_DIR, SELECTED_CLASSES, SEED, IMAGE_EXTS
+)
 
 
 # =========================================================
-#               CONFIGURATION
+#               CONFIGURATION (imported from config.py)
 # =========================================================
-DATA_ROOT = Path("/home/punchan0m/project/PatchCore/data")
-MODEL_OUTPUT_DIR = Path("./model/patchcore")  # โฟลเดอร์สำหรับ .pth แยกแต่ละ class
-
-IMG_SIZE = 512
-GRID_SIZE = 20
-CORESSET_RATIO = 0.12
-K_NEAREST = 4
-
-# เลือกเฉพาะ class หลักที่ต้องการ train หรือ None = train ทุก class
-# เช่น "vitaminc" จะ train ทุก subclass (vitaminc_front, vitaminc_back, ...)
-SELECTED_CLASSES = [
-    "vitaminc",
-    "white",
-    # "yellow",
-    "paracap",
-    # 'y'
-]  # [] / None = train ทุกคลาส, หรือระบุรายชื่อคลาสหลัก
-
-SEED = 42
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
-FALLBACK_THRESHOLD = 0.35
-
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -99,7 +86,7 @@ def main():
     print(f"Device          : {DEVICE}")
     print(f"Image size      : {IMG_SIZE} × {IMG_SIZE}")
     print(f"Grid size       : {GRID_SIZE} × {GRID_SIZE}")
-    print(f"Coreset ratio   : {CORESSET_RATIO}")
+    print(f"Coreset ratio   : {CORESET_RATIO}")
     print(f"k-nearest       : {K_NEAREST}")
     print(f"Data root       : {DATA_ROOT}")
     print(f"Output dir      : {MODEL_OUTPUT_DIR}")
@@ -152,7 +139,7 @@ def main():
             bank = trainer.build_memory_bank_from_dir(
                 train_good,
                 rng,
-                coreset_ratio=CORESSET_RATIO,
+                coreset_ratio=CORESET_RATIO,
                 image_exts=tuple(IMAGE_EXTS),
             )
             if bank is None:
@@ -185,7 +172,7 @@ def main():
                     "model_size": IMG_SIZE,
                     "grid_size": GRID_SIZE,
                     "k_nearest": K_NEAREST,
-                    "coreset_ratio": CORESSET_RATIO,
+                    "coreset_ratio": CORESET_RATIO,
                     "seed": SEED,
                     "parent_class": parent_name,
                 }

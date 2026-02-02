@@ -12,43 +12,28 @@ Hotkeys:
     Enter - Force summarize
     ESC/q - Quit
 """
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import cv2
 import numpy as np
-from pathlib import Path
 from datetime import datetime
 
-from core_predict import PillInspector, InspectorConfig
-from core_predict import draw_summary, put_text_top_left, put_text_top_right
-from core_predict import COLOR_ANOMALY
+from MobilenetPatchCore.core_predict.inspector import PillInspector, InspectorConfig
+from MobilenetPatchCore.core_predict.visualizer import draw_summary, put_text_top_left, put_text_top_right, COLOR_ANOMALY
+from config import (
+    SEGMENTATION_MODEL_PATH, DETECTION_MODEL_PATH,
+    MODEL_OUTPUT_DIR as MODEL_DIR,
+    SAVE_DIR, COMPARE_CLASSES,
+    CAMERA_INDEX, FRAMES_BEFORE_SUMMARY, WINDOW_NAME
+)
 
 
 # =========================================================
-# CONFIGURATION
-# =========================================================
-WINDOW_NAME = "Pill Inspector"
-CAMERA_INDEX = 0
-FRAMES_BEFORE_SUMMARY = 5
-SAVE_DIR = Path("./data/inspected")
-
-# Parent classes to compare (จะโหลดทุก subclass จาก ./model/patchcore/{class_name}/)
-# เช่น "vitaminc" จะโหลด vitaminc_front.pth, vitaminc_back.pth, ...
-COMPARE_CLASSES = [
-    "vitaminc",
-    # "white",
-    # "yellow",
-    # "paracap"
-]
-
-# Path to model directory
-MODEL_DIR = Path("./model/patchcore")
-
-# YOLO Models
-SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"       # Segmentation model (works!)
-DETECTION_MODEL_PATH = "model/best(2).pt"             # Detection model for initial bbox detection       
-
-
-# =========================================================
-# FUNCTIONS
+# CONFIGURATION (imported from config.py)
 # =========================================================
 def save_crops(crops: dict, output_dir: Path) -> int:
     """Save crops to directory."""

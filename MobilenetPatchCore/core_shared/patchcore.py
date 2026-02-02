@@ -22,9 +22,9 @@ class PatchCore:
     
     def __init__(
         self,
-        model_size: int = 512,
-        grid_size: int = 14,
-        k_nearest: int = 4,
+        model_size: int = 256,
+        grid_size: int = 20,
+        k_nearest: int = 19,
         device: str = None,
     ):
         """

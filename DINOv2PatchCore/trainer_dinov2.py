@@ -1,9 +1,9 @@
-# core_train/trainer.py
+# DINOv2PatchCore/trainer_dinov2.py
 """
-PatchCore Training Utilities.
+DINOv2 PatchCore Training Utilities.
 
 Single Responsibility:
-- Build memory banks from training images
+- Build memory banks from training images using DINOv2 features
 - Perform coreset subsampling
 - Calibrate thresholds
 """
@@ -13,16 +13,16 @@ from pathlib import Path
 from PIL import Image
 from typing import Optional, Sequence, Iterable
 
-from core_shared import PatchCore
+from .core_dinov2 import DINOv2PatchCore
 
 
-class PatchCoreTrainer:
-    """Training utilities for PatchCore."""
+class DINOv2PatchCoreTrainer:
+    """Training utilities for DINOv2-based PatchCore."""
     
-    def __init__(self, patchcore: PatchCore):
+    def __init__(self, patchcore: DINOv2PatchCore):
         """
         Args:
-            patchcore: PatchCore feature extractor instance
+            patchcore: DINOv2PatchCore feature extractor instance
         """
         self.patchcore = patchcore
     

@@ -3,12 +3,12 @@
 Prediction modules for realtime pill inspection.
 
 Usage:
-    from core_predict import PillInspector, InspectorConfig
-    from core_predict import PillYOLODetector
+    from MobilenetPatchCore.core_predict import PillInspector, InspectorConfig
+    from MobilenetPatchCore.core_predict import PillYOLODetector
 """
-from core_predict.yolo_detector import PillYOLODetector
-from core_predict.inspector import PillInspector, InspectorConfig, make_square_crop
-from core_predict.visualizer import (
+from .yolo_detector import PillYOLODetector
+from .inspector import PillInspector, InspectorConfig, make_square_crop
+from .visualizer import (
     draw_pill_results,
     draw_summary,
     put_text_with_bg,
