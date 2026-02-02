@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Machine Learning Models
+model/
+*.pt
+*.pth
+*.onnx
+*.pb
+*.h5
+*.pkl
+*.joblib
+
+# Data (ถ้าไม่ต้องการเก็บ data ใน git)
+# data/
+
+# Logs and outputs
+*.log
+logs/
+outputs/
+runs/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb
+
+# Environment variables
+.env
+.env.local
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+
+data/
+model/
