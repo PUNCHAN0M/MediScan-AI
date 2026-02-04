@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-# MobilenetPatchCore/train_patchcore.py
+# MobilenetSIFE/train_patchcore.py
 """
-สคริปต์สำหรับฝึก MobileNetV3 PatchCore
+สคริปต์สำหรับฝึก MobileNetV3 + SIFE PatchCore
 
 🎯 Best for:
-- Fast inference (lightweight model)
-- Good texture detection
-- Real-time applications
+- Enhanced spatial awareness for defect localization
+- Better small defect detection with position encoding
+- Improved accuracy with minimal speed impact
 
 Usage:
-    python run_train_mobilenet.py
+    python run_train_sife.py
     # หรือ
-    python MobilenetPatchCore/train_patchcore.py
+    python MobilenetSIFE/train_patchcore.py
 """
 import sys
 from pathlib import Path
@@ -23,18 +23,34 @@ import torch
 import numpy as np
 from datetime import datetime
 
-from MobilenetPatchCore.core_shared.patchcore import PatchCore
-from MobilenetPatchCore.core_train.trainer import PatchCoreTrainer
+from MobilenetSIFE.core_shared.patchcore_sife import PatchCoreSIFE
+from MobilenetSIFE.core_train.trainer import PatchCoreSIFETrainer
 
 # Import configurations
 from config.base import DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS
-from config.mobilenet import (
+from config.sife import (
     IMG_SIZE,
     GRID_SIZE,
     CORESET_RATIO,
     K_NEAREST,
     FALLBACK_THRESHOLD,
     MODEL_OUTPUT_DIR,
+    # SIFE settings
+    USE_SIFE,
+    SIFE_DIM,
+    SIFE_ENCODING_TYPE,
+    SIFE_WEIGHT,
+    USE_CENTER_DISTANCE,
+    USE_LOCAL_GRADIENT,
+    # Multi-scale & Edge Enhancement
+    USE_MULTI_SCALE,
+    MULTI_SCALE_GRIDS,
+    USE_EDGE_ENHANCEMENT,
+    EDGE_WEIGHT,
+    # Color settings
+    USE_COLOR_FEATURES,
+    USE_HSV,
+    COLOR_WEIGHT,
 )
 
 
@@ -55,19 +71,17 @@ def save_class_pth(parent_class: str, subclass_name: str, class_data: dict) -> P
     return output_path
 
 
-def _resolve_parent_classes(data_root: Path, selected_classes, trainer: PatchCoreTrainer) -> list[Path]:
+def _resolve_parent_classes(data_root: Path, selected_classes, trainer: PatchCoreSIFETrainer) -> list[Path]:
     """หา parent class folders ที่มี subclass folders ภายใน"""
     if selected_classes:
         dirs = [data_root / name for name in selected_classes]
     else:
         dirs = [d for d in data_root.iterdir() if d.is_dir()]
 
-    # keep only parent classes that have at least one valid subclass
     resolved: list[Path] = []
     for d in dirs:
         if not d.is_dir():
             continue
-        # ตรวจสอบว่ามี subclass folder ที่มี train/good หรือไม่
         has_valid_subclass = False
         for sub in d.iterdir():
             if sub.is_dir():
@@ -82,7 +96,7 @@ def _resolve_parent_classes(data_root: Path, selected_classes, trainer: PatchCor
     return resolved
 
 
-def _get_subclass_dirs(parent_dir: Path, trainer: PatchCoreTrainer) -> list[Path]:
+def _get_subclass_dirs(parent_dir: Path, trainer: PatchCoreSIFETrainer) -> list[Path]:
     """หา subclass folders ภายใน parent class folder"""
     subclasses = []
     for sub in parent_dir.iterdir():
@@ -96,27 +110,55 @@ def _get_subclass_dirs(parent_dir: Path, trainer: PatchCoreTrainer) -> list[Path
 
 def main():
     print("=" * 70)
-    print("          PatchCore Training - Multiclass (.pth)")
+    print("      MobileNet + SIFE PatchCore Training")
     print("=" * 70)
     print(f"Device          : {DEVICE}")
     print(f"Image size      : {IMG_SIZE} × {IMG_SIZE}")
     print(f"Grid size       : {GRID_SIZE} × {GRID_SIZE}")
     print(f"Coreset ratio   : {CORESET_RATIO}")
     print(f"k-nearest       : {K_NEAREST}")
+    print("-" * 70)
+    print("SIFE Settings:")
+    print(f"  Enabled       : {USE_SIFE}")
+    print(f"  Dimension     : {SIFE_DIM}")
+    print(f"  Encoding      : {SIFE_ENCODING_TYPE}")
+    print(f"  Weight        : {SIFE_WEIGHT}")
+    print(f"  Center dist   : {USE_CENTER_DISTANCE}")
+    print(f"  Local gradient: {USE_LOCAL_GRADIENT}")
+    print("-" * 70)
+    print("🔥 Enhancement Settings:")
+    print(f"  Multi-scale   : {USE_MULTI_SCALE} {MULTI_SCALE_GRIDS if USE_MULTI_SCALE else ''}")
+    print(f"  Edge enhance  : {USE_EDGE_ENHANCEMENT} (weight={EDGE_WEIGHT})")
+    print("-" * 70)
     print(f"Data root       : {DATA_ROOT}")
     print(f"Output dir      : {MODEL_OUTPUT_DIR}")
     print("-" * 70)
 
     rng = np.random.default_rng(SEED)
 
-    patchcore = PatchCore(
+    # Initialize PatchCore with SIFE
+    patchcore = PatchCoreSIFE(
         model_size=IMG_SIZE,
         grid_size=GRID_SIZE,
         k_nearest=K_NEAREST,
-        device=DEVICE
+        device=DEVICE,
+        use_sife=USE_SIFE,
+        sife_dim=SIFE_DIM,
+        sife_encoding_type=SIFE_ENCODING_TYPE,
+        sife_weight=SIFE_WEIGHT,
+        use_center_distance=USE_CENTER_DISTANCE,
+        use_local_gradient=USE_LOCAL_GRADIENT,
+        use_color_features=USE_COLOR_FEATURES,
+        use_hsv=USE_HSV,
+        color_weight=COLOR_WEIGHT,
+        # 🔥 NEW: Multi-scale & Edge Enhancement
+        use_multi_scale=USE_MULTI_SCALE,
+        multi_scale_grids=MULTI_SCALE_GRIDS,
+        use_edge_enhancement=USE_EDGE_ENHANCEMENT,
+        edge_weight=EDGE_WEIGHT,
     )
     
-    trainer = PatchCoreTrainer(patchcore)
+    trainer = PatchCoreSIFETrainer(patchcore)
 
     parent_dirs = _resolve_parent_classes(DATA_ROOT, SELECTED_CLASSES, trainer)
     if not parent_dirs:
@@ -124,7 +166,7 @@ def main():
         return
 
     print("Parent classes ที่จะ train:", [d.name for d in parent_dirs])
-    saved_classes = {}  # {parent: [subclasses]}
+    saved_classes = {}
 
     for parent_dir in parent_dirs:
         parent_name = parent_dir.name
@@ -150,7 +192,7 @@ def main():
                 continue
 
             # 1. สร้าง memory bank
-            print("    1. Building memory bank...")
+            print("    1. Building memory bank with SIFE features...")
             bank = trainer.build_memory_bank_from_dir(
                 train_good,
                 rng,
@@ -175,7 +217,7 @@ def main():
             else:
                 threshold = FALLBACK_THRESHOLD
 
-            # เก็บข้อมูลและบันทึกทันที
+            # เก็บข้อมูลและบันทึก
             bank_tensor = torch.from_numpy(bank).contiguous().cpu()
 
             class_data = {
@@ -183,6 +225,7 @@ def main():
                 "threshold": threshold,
                 "meta": {
                     "n_patches": int(bank.shape[0]),
+                    "feature_dim": int(bank.shape[1]),
                     "created_at": datetime.now().isoformat(),
                     "model_size": IMG_SIZE,
                     "grid_size": GRID_SIZE,
@@ -190,13 +233,24 @@ def main():
                     "coreset_ratio": CORESET_RATIO,
                     "seed": SEED,
                     "parent_class": parent_name,
+                    "backbone": "MobileNetV3_SIFE",
+                    # SIFE settings
+                    "use_sife": USE_SIFE,
+                    "sife_dim": SIFE_DIM,
+                    "sife_encoding_type": SIFE_ENCODING_TYPE,
+                    "sife_weight": SIFE_WEIGHT,
+                    "use_center_distance": USE_CENTER_DISTANCE,
+                    "use_local_gradient": USE_LOCAL_GRADIENT,
+                    # Color settings
+                    "use_color_features": USE_COLOR_FEATURES,
+                    "use_hsv": USE_HSV,
+                    "color_weight": COLOR_WEIGHT,
                 }
             }
 
-            # บันทึกแต่ละ subclass แยกไฟล์ภายใต้ parent folder
             save_class_pth(parent_name, subclass_name, class_data)
             saved_classes[parent_name].append(subclass_name)
-            print(f"    {subclass_name}: patches={bank.shape[0]:,} threshold={threshold:.4f}")
+            print(f"    {subclass_name}: patches={bank.shape[0]:,} dim={bank.shape[1]} threshold={threshold:.4f}")
 
     # สรุปผล
     total_saved = sum(len(subs) for subs in saved_classes.values())
@@ -211,7 +265,7 @@ def main():
         print("\nไม่มี class ใดถูกบันทึกสำเร็จ")
 
     print("\n" + "="*70)
-    print("                การฝึก PatchCore เสร็จสมบูรณ์!")
+    print("      การฝึก MobileNet + SIFE PatchCore เสร็จสมบูรณ์!")
     print("="*70)
 
 

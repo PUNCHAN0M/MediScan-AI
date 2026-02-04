@@ -1,10 +1,17 @@
-# train_patchcore_dinov2.py
+#!/usr/bin/env python3
+# DINOv2PatchCore/train_patchcore_dinov2.py
 """
-สคริปต์สำหรับฝึก PatchCore ด้วย DINOv2 backbone
-- ใช้ DINOv2 (ViT) แทน MobileNetV3
-- ดีกว่าในการแยกสีและ texture
-- สร้าง memory bank จากภาพ good (train set)
-- บันทึกแยกไฟล์ต่อ subclass
+สคริปต์สำหรับฝึก DINOv2 PatchCore
+
+🎯 Best for:
+- Complex texture + shape anomalies
+- High-quality offline inspection
+- Best semantic understanding
+
+Usage:
+    python run_train_dinov2.py
+    # หรือ
+    python DINOv2PatchCore/train_patchcore_dinov2.py
 """
 import sys
 from pathlib import Path
@@ -19,33 +26,23 @@ from datetime import datetime
 from DINOv2PatchCore.core_dinov2 import DINOv2PatchCore
 from DINOv2PatchCore.trainer_dinov2 import DINOv2PatchCoreTrainer
 
+# Import configurations
+from config.base import DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS
+from config.dinov2 import (
+    IMG_SIZE,
+    GRID_SIZE,
+    CORESET_RATIO,
+    K_NEAREST,
+    FALLBACK_THRESHOLD,
+    MODEL_OUTPUT_DIR,
+    BACKBONE_SIZE,
+    MULTI_SCALE,
+)
 
-# =========================================================
-#               CONFIGURATION
-# =========================================================
-DATA_ROOT = Path("/home/punchan0m/project/MediScan-AI/MediScan-AI/data")
-MODEL_OUTPUT_DIR = Path("./model/patchcore_dinov2")  # แยกโฟลเดอร์จาก MobileNet
 
-# DINOv2 Parameters
-IMG_SIZE = 252          # Must be divisible by 14 (DINOv2 patch size)
-GRID_SIZE = 18          # 18x18 = 324 patches
-CORESET_RATIO = 0.18    # Memory bank ratio
-K_NEAREST = 19          # k-nearest neighbors
-BACKBONE_SIZE = "base"  # "small" (fast), "base" (balanced), "large" (best quality)
-MULTI_SCALE = True      # Extract multi-scale features
-
-# Selected classes to train
-SELECTED_CLASSES = [
-    'vitaminc',
-    # 'oval_orange',  # ถ้ามี - แยกสีส้ม
-    # 'oval_white',   # ถ้ามี - แยกสีขาว
-    # 'white',
-    # 'paracap',
-]
-
-SEED = 42
-IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
-FALLBACK_THRESHOLD = 0.40
+# =============================================================================
+#                              RUNTIME SETTINGS
+# =============================================================================
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

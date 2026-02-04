@@ -14,7 +14,7 @@ PAD = 0          # padding รอบ segmentation mask (pixel)
 
 # โฟลเดอร์สำหรับบันทึกภาพ (จะสร้างอัตโนมัติถ้ายังไม่มี)
 SAVE_BASE_DIR = "data"
-PILL_NAME = "vitaminc/vitaminc_front"          # ← เปลี่ยนตรงนี้เป็นชื่อยา/ประเภทที่ต้องการ เช่น "paracetamol", "amoxicillin" เป็นต้น
+PILL_NAME = "yolo"          # ← เปลี่ยนตรงนี้เป็นชื่อยา/ประเภทที่ต้องการ เช่น "paracetamol", "amoxicillin" เป็นต้น
 SAVE_DIR = os.path.join(SAVE_BASE_DIR, PILL_NAME, "train", "good")
 # SAVE_DIR = os.path.join(SAVE_BASE_DIR, PILL_NAME, "test", "good")
 # SAVE_DIR = os.path.join(SAVE_BASE_DIR, PILL_NAME, "test", "cracked")  # เปลี่ยนโฟลเดอร์ย่อยตามต้องการ เช่น "good", "cracked", "dirty"

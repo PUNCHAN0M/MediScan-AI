@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-# predict_camera.py
+# MobilenetPatchCore/predict_camera.py
 """
-Realtime Pill Inspection with Camera.
+Realtime Pill Inspection with Camera using MobileNetV3.
+
+🎯 Best for:
+- Fast inference (lightweight model)
+- Good texture detection
+- Real-time applications
 
 Usage:
-    python predict_camera.py
+    python run_predict_mobilenet.py
+    # หรือ
+    python MobilenetPatchCore/predict_camera.py
 
 Hotkeys:
     s     - Save current crops
@@ -24,17 +31,23 @@ from datetime import datetime
 
 from MobilenetPatchCore.core_predict.inspector import PillInspector, InspectorConfig
 from MobilenetPatchCore.core_predict.visualizer import draw_summary, put_text_top_left, put_text_top_right, COLOR_ANOMALY
-from config import (
-    SEGMENTATION_MODEL_PATH, DETECTION_MODEL_PATH,
-    MODEL_OUTPUT_DIR as MODEL_DIR,
-    SAVE_DIR, COMPARE_CLASSES,
-    CAMERA_INDEX, FRAMES_BEFORE_SUMMARY, WINDOW_NAME
+
+# Import configurations
+from config.base import (
+    SEGMENTATION_MODEL_PATH,
+    DETECTION_MODEL_PATH,
+    SAVE_DIR,
+    COMPARE_CLASSES,
+    CAMERA_INDEX,
+    FRAMES_BEFORE_SUMMARY,
+    WINDOW_NAME,
 )
+from config.mobilenet import MODEL_OUTPUT_DIR as MODEL_DIR
 
 
-# =========================================================
-# CONFIGURATION (imported from config.py)
-# =========================================================
+# =============================================================================
+#                              HELPER FUNCTIONS
+# =============================================================================
 def save_crops(crops: dict, output_dir: Path) -> int:
     """Save crops to directory."""
     if not crops:

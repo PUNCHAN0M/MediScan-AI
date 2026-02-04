@@ -1,14 +1,16 @@
 # DINOv2PatchCore/core_dinov2.py
 """
-DINOv2 PatchCore Feature Extractor.
+DINOv2 PatchCore Feature Extractor + Color Features.
 
 Uses DINOv2 (ViT) backbone for superior feature extraction:
 - Better color/texture discrimination than MobileNet
 - Multi-scale patch tokens with rich semantic information
 - Self-supervised features work great for anomaly detection
 
+🔥 Updated: Added optional color features (RGB/HSV mean/std) to improve color anomaly detection.
+
 Single Responsibility:
-- Extract patch features from images using DINOv2
+- Extract patch features from images using DINOv2 (+ optional Color)
 - Compute anomaly scores using FAISS index
 """
 import torch
@@ -19,18 +21,20 @@ import faiss
 import cv2
 import numpy as np
 from PIL import Image
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 
 class DINOv2PatchCore:
     """
-    Feature extractor using DINOv2 ViT backbone.
+    Feature extractor using DINOv2 ViT backbone + optional Color Features.
     
     DINOv2 advantages over MobileNet:
     1. Better texture discrimination - critical for defect detection
     2. Better color awareness - can differentiate similar shapes with different colors
     3. Richer patch-level features from Vision Transformer architecture
     4. Self-supervised pretraining captures fine-grained details
+    
+    🔥 NEW: Optional color features for cases where DINOv2 still ignores color
     """
     
     # DINOv2 model sizes
@@ -50,6 +54,9 @@ class DINOv2PatchCore:
         backbone_size: str = "small",  # "small", "base", "large", "giant"
         use_registers: bool = False,   # Use DINOv2 with registers (v2)
         multi_scale: bool = True,      # Use multi-scale features
+        use_color_features: bool = False,  # 🔥 NEW: Add RGB mean/std
+        use_hsv: bool = False,              # 🔥 NEW: Add HSV mean/std
+        color_weight: float = 1.0,          # 🔥 NEW: Weight for color features
     ):
         """
         Args:
@@ -60,6 +67,9 @@ class DINOv2PatchCore:
             backbone_size: DINOv2 model size ("small", "base", "large", "giant")
             use_registers: Use DINOv2 with registers for better features
             multi_scale: Extract features at multiple scales
+            use_color_features: Whether to add RGB mean/std per patch
+            use_hsv: Whether to also add HSV mean/std per patch
+            color_weight: Multiplier for color features
         """
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model_size = model_size
@@ -67,6 +77,9 @@ class DINOv2PatchCore:
         self.k_nearest = k_nearest
         self.backbone_size = backbone_size
         self.multi_scale = multi_scale
+        self.use_color_features = use_color_features
+        self.use_hsv = use_hsv
+        self.color_weight = color_weight
         
         # Load DINOv2 backbone
         self._load_backbone(backbone_size, use_registers)
@@ -74,9 +87,17 @@ class DINOv2PatchCore:
         # Get feature dimension
         self.feature_dim = self._get_feature_dim()
         
+        # Calculate color feature dimension
+        self.color_feature_dim = 0
+        if use_color_features:
+            self.color_feature_dim += 6  # RGB mean (3) + RGB std (3)
+        if use_hsv:
+            self.color_feature_dim += 6  # HSV mean (3) + HSV std (3)
+        
         # Transform - DINOv2 expects 224x224 or multiples of 14
         # For best results, use 224, 336, 448, 518
         target_size = self._round_to_patch_size(model_size)
+        self.target_size = target_size
         
         self.transform = T.Compose([
             T.Resize((target_size, target_size), interpolation=T.InterpolationMode.BICUBIC),
@@ -84,9 +105,17 @@ class DINOv2PatchCore:
             T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
         
+        # Raw transform for color extraction
+        self.raw_transform = T.Compose([
+            T.Resize((target_size, target_size), interpolation=T.InterpolationMode.BICUBIC),
+            T.ToTensor(),
+        ])
+        
         print(f"[DINOv2PatchCore] Loaded {backbone_size} model")
         print(f"[DINOv2PatchCore] Input size: {target_size}x{target_size}")
         print(f"[DINOv2PatchCore] Feature dim: {self.feature_dim}")
+        if use_color_features or use_hsv:
+            print(f"[DINOv2PatchCore] Color features: RGB={use_color_features}, HSV={use_hsv}")
         print(f"[DINOv2PatchCore] Device: {self.device}")
     
     def _round_to_patch_size(self, size: int, patch_size: int = 14) -> int:
@@ -130,14 +159,75 @@ class DINOv2PatchCore:
         """Get output feature dimension."""
         dims = {"small": 384, "base": 768, "large": 1024, "giant": 1536}
         return dims.get(self.backbone_size, 384)
+
+    def _extract_color_features(self, raw_tensor: torch.Tensor) -> torch.Tensor:
+        """Extract color statistics per patch from raw image tensor."""
+        b, c, h, w = raw_tensor.shape
+        
+        patch_h = h // self.grid_size
+        patch_w = w // self.grid_size
+        
+        x = raw_tensor[:, :, :patch_h * self.grid_size, :patch_w * self.grid_size]
+        patches = x.unfold(2, patch_h, patch_h).unfold(3, patch_w, patch_w)
+        patches = patches.contiguous().view(b, c, self.grid_size * self.grid_size, patch_h, patch_w)
+        patches = patches.permute(0, 2, 1, 3, 4)
+        patches = patches.reshape(-1, c, patch_h, patch_w)
+        
+        color_feats = []
+        
+        if self.use_color_features:
+            rgb_mean = patches.mean(dim=(2, 3))
+            rgb_std = patches.std(dim=(2, 3))
+            color_feats.extend([rgb_mean, rgb_std])
+        
+        if self.use_hsv:
+            hsv_patches = self._rgb_to_hsv_batch(patches)
+            hsv_mean = hsv_patches.mean(dim=(2, 3))
+            hsv_std = hsv_patches.std(dim=(2, 3))
+            color_feats.extend([hsv_mean, hsv_std])
+        
+        if not color_feats:
+            return None
+        
+        color_features = torch.cat(color_feats, dim=1)
+        
+        if self.color_weight != 1.0:
+            color_features = color_features * self.color_weight
+        
+        return color_features
+
+    @staticmethod
+    def _rgb_to_hsv_batch(rgb: torch.Tensor) -> torch.Tensor:
+        """Convert RGB tensor to HSV."""
+        r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+        
+        max_rgb, argmax_rgb = rgb.max(dim=1)
+        min_rgb = rgb.min(dim=1)[0]
+        diff = max_rgb - min_rgb
+        
+        v = max_rgb
+        s = torch.zeros_like(max_rgb)
+        mask = max_rgb > 0
+        s[mask] = diff[mask] / max_rgb[mask]
+        
+        h = torch.zeros_like(max_rgb)
+        mask_r = (argmax_rgb == 0) & (diff > 0)
+        h[mask_r] = (g[mask_r] - b[mask_r]) / diff[mask_r] / 6.0
+        mask_g = (argmax_rgb == 1) & (diff > 0)
+        h[mask_g] = (b[mask_g] - r[mask_g]) / diff[mask_g] / 6.0 + 1/3
+        mask_b = (argmax_rgb == 2) & (diff > 0)
+        h[mask_b] = (r[mask_b] - g[mask_b]) / diff[mask_b] / 6.0 + 2/3
+        h = h % 1.0
+        
+        return torch.stack([h, s, v], dim=1)
     
     @torch.no_grad()
     def extract_features(self, image: Image.Image) -> np.ndarray:
         """
-        Extract patch features from PIL Image using DINOv2.
+        Extract patch features (DINOv2 + optional Color) from PIL Image.
         
         Returns:
-            numpy array of shape (grid_size * grid_size, feature_dim)
+            numpy array of shape (grid_size * grid_size, feature_dim + color_dim)
         """
         x = self.transform(image).unsqueeze(0).to(self.device)
         
@@ -163,6 +253,13 @@ class DINOv2PatchCore:
         
         # Reshape back to patches: (N, C)
         patches = features.permute(0, 2, 3, 1).reshape(-1, dim)
+        
+        # Add color features if enabled
+        if self.use_color_features or self.use_hsv:
+            x_raw = self.raw_transform(image).unsqueeze(0).to(self.device)
+            color_features = self._extract_color_features(x_raw)
+            if color_features is not None:
+                patches = torch.cat([patches, color_features], dim=1)
         
         # L2 normalize
         patches = patches / torch.norm(patches, p=2, dim=-1, keepdim=True)
