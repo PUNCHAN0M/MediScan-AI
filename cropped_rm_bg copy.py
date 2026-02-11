@@ -150,14 +150,63 @@ def draw_detections(frame, pill_info):
     return vis
 
 
-def preprocess_illumination(frame):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    v_clahe = clahe.apply(v)
-    hsv_clahe = cv2.merge([h, s, v_clahe])
-    result = cv2.cvtColor(hsv_clahe, cv2.COLOR_HSV2BGR)
-    return result
+def preprocess_realtime(img):
+    out = img.astype(np.float32)
+
+    # ===== อ่านค่าจาก slider =====
+    brightness = cv2.getTrackbarPos("brightness", "Controls") - 100
+    contrast   = cv2.getTrackbarPos("contrast", "Controls") / 100
+    r_gain     = cv2.getTrackbarPos("red", "Controls") / 100
+    g_gain     = cv2.getTrackbarPos("green", "Controls") / 100
+    b_gain     = cv2.getTrackbarPos("blue", "Controls") / 100
+    clahe_val  = cv2.getTrackbarPos("clahe", "Controls")
+    sharp_val  = cv2.getTrackbarPos("sharp", "Controls")
+    gamma_val  = cv2.getTrackbarPos("gamma", "Controls") / 100
+    denoise    = cv2.getTrackbarPos("denoise", "Controls")
+    lap_edge   = cv2.getTrackbarPos("lap_edge", "Controls")
+
+    # ===== brightness + contrast =====
+    out = out * contrast + brightness
+
+    # ===== RGB gain =====
+    out[:,:,2] *= r_gain
+    out[:,:,1] *= g_gain
+    out[:,:,0] *= b_gain
+
+    out = np.clip(out, 0, 255).astype(np.uint8)
+
+    # ===== CLAHE =====
+    if clahe_val > 0:
+        lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+        l,a,b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=clahe_val/10+1, tileGridSize=(8,8))
+        l = clahe.apply(l)
+        out = cv2.cvtColor(cv2.merge([l,a,b]), cv2.COLOR_LAB2BGR)
+
+    # ===== Denoise =====
+    if denoise > 0:
+        out = cv2.fastNlMeansDenoisingColored(out, None, denoise, denoise, 7, 21)
+
+    # ===== Sharpen =====
+    if sharp_val > 0:
+        blur = cv2.GaussianBlur(out,(0,0),3)
+        out = cv2.addWeighted(out, 1+sharp_val/30, blur, -sharp_val/30, 0)
+
+    # ===== Laplacian Edge Boost (คล้าย SIFE) =====
+    if lap_edge > 0:
+        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        lap = cv2.convertScaleAbs(lap)
+        lap = cv2.cvtColor(lap, cv2.COLOR_GRAY2BGR)
+        out = cv2.addWeighted(out, 1.0, lap, lap_edge/100, 0)
+
+    # ===== Gamma =====
+    if gamma_val != 1:
+        table = np.array([(i/255.0)**(1/gamma_val)*255 for i in range(256)]).astype("uint8")
+        out = cv2.LUT(out, table)
+
+    return out
+
 
 
 def save_cropped_pills(cropped_pills, pill_info):
@@ -174,6 +223,7 @@ def save_cropped_pills(cropped_pills, pill_info):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     saved_count = 0
+    
     for i, (crop_img, info) in enumerate(zip(cropped_pills, pill_info)):
         conf_str = f"{info['confidence']:.3f}".replace(".", "")
         # ตัวเลือก 1: ใช้ timestamp + ลำดับ + conf (แนะนำ)
@@ -194,6 +244,48 @@ def save_cropped_pills(cropped_pills, pill_info):
 
     print(f"→ บันทึกทั้งหมด {saved_count} ภาพในเฟรมนี้")
 
+# ------------------- Realtime Controller -------------------
+def nothing(x):
+    pass
+
+def create_control_panel():
+    """
+    มีแสงอยู่ข้าง
+    BRIGHT_DEFAULT = 75
+    CONTRAST_DEFAULT = 66  # 1.0
+    CLAHE_DEFAULT = 50
+    SHARP_DEFAULT = 27
+    GAMMA_DEFAULT = 136     # 1.0
+    ไม่มีแสงอยู่ข้าง
+    BRIGHT_DEFAULT = 200
+    CONTRAST_DEFAULT = 66  # 1.0
+    CLAHE_DEFAULT = 18
+    SHARP_DEFAULT = 0
+    GAMMA_DEFAULT = 43     # 1.0
+
+    """
+    BRIGHT_DEFAULT = 75
+    CONTRAST_DEFAULT = 66  # 1.0
+    CLAHE_DEFAULT = 50
+    SHARP_DEFAULT = 27
+    GAMMA_DEFAULT = 136     # 1.0
+
+    cv2.namedWindow("Controls", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Controls", 420, 500)
+
+    cv2.createTrackbar("red", "Controls", 100, 200, nothing)
+    cv2.createTrackbar("green", "Controls", 100, 200, nothing)
+    cv2.createTrackbar("blue", "Controls", 100, 200, nothing)
+
+    cv2.createTrackbar("brightness", "Controls", BRIGHT_DEFAULT, 200, nothing)
+    cv2.createTrackbar("contrast", "Controls", CONTRAST_DEFAULT, 300, nothing)
+
+    cv2.createTrackbar("clahe", "Controls", CLAHE_DEFAULT, 50, nothing)
+    cv2.createTrackbar("sharp", "Controls", SHARP_DEFAULT, 100, nothing)
+    cv2.createTrackbar("gamma", "Controls", GAMMA_DEFAULT, 300, nothing)
+
+    cv2.createTrackbar("denoise", "Controls", 0, 20, nothing)
+    cv2.createTrackbar("lap_edge", "Controls", 0, 100, nothing)
 
 # ------------------- Main Realtime Loop -------------------
 def main():
@@ -210,6 +302,7 @@ def main():
     print("กด ESC เพื่อออก")
     print("กด p เพื่อดู crop เซกเมนต์ทั้งหมด (สูงสุด 6)")
     print("กด s เพื่อบันทึกภาพ cropped ทุกเม็ดในเฟรมปัจจุบัน ลง", SAVE_DIR)
+    create_control_panel()
 
     while True:
         start_time = time.time()
@@ -219,7 +312,7 @@ def main():
             print("อ่านเฟรมล้มเหลว")
             break
 
-        frame_pre = preprocess_illumination(frame)
+        frame_pre = preprocess_realtime(frame)
 
         results = detect_pills(model, frame_pre)
 

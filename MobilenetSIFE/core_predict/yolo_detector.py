@@ -250,7 +250,7 @@ class PillYOLODetector:
             inds = np.where(iou <= thr)[0]
             order = order[inds + 1]
 
-        return np.array(keep)
+        return np.array(keep, dtype=int)
 
     @staticmethod
     def _mask_nms(masks, scores, thr=0.75):
@@ -275,7 +275,7 @@ class PillYOLODetector:
             inds = np.where(iou <= thr)[0]
             order = order[inds + 1]
 
-        return np.array(keep)
+        return np.array(keep, dtype=int)
 
     def _detect_bbox_mode(
         self, frame: np.ndarray, results

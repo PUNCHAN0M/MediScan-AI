@@ -33,7 +33,7 @@ from config.base import DEFAULT_FALLBACK_THRESHOLD
 IMG_SIZE = 256                  # Input image size (pixels)
 
 # Patch extraction - SMALLER = detect smaller defects
-GRID_SIZE = 14                  # 🔥 40×40 = 1600 patches (จับ defect จิ๋วได้ดี)
+GRID_SIZE = 18                  # 🔥 40×40 = 1600 patches (จับ defect จิ๋วได้ดี)
                                 # ยิ่ง grid เยอะ ยิ่งเห็น defect เล็กๆ
 
 # Memory bank

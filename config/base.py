@@ -20,9 +20,10 @@ DATA_ROOT = Path("/home/punchan0m/project/MediScan-AI/MediScan-AI/data")
 SAVE_DIR = Path("./data/inspected")
 
 # YOLO model paths
+# SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
+# DETECTION_MODEL_PATH = "model/yolo12-seg.pt"
+DETECTION_MODEL_PATH = "model/pill-detection.pt"
 SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
-DETECTION_MODEL_PATH = "model/yolo12-seg.pt"
-
 
 # =============================================================================
 #                           TRAINING CONFIGURATION
