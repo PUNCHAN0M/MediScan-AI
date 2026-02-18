@@ -16,14 +16,14 @@ from pathlib import Path
 # =============================================================================
 
 # Data directories
-DATA_ROOT = Path("/home/punchan0m/project/MediScan-AI/MediScan-AI/data")
+DATA_ROOT = Path("D:\project\Medicine-AI\MediScan-AI\data")
 SAVE_DIR = Path("./data/inspected")
 
 # YOLO model paths
 # SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
 # DETECTION_MODEL_PATH = "model/yolo12-seg.pt"
-DETECTION_MODEL_PATH = "model/pill-detection.pt"
-SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
+DETECTION_MODEL_PATH = "model/pill-detection-best.onnx"
+SEGMENTATION_MODEL_PATH = "model/pill-detection-best.onnx"
 
 # =============================================================================
 #                           TRAINING CONFIGURATION
@@ -37,18 +37,15 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 # Classes to train (empty list = train all available classes)
 SELECTED_CLASSES = [
+    "brown_cap",
+    "circle_gray",
+    "cream",
+    "oval",
+    "red_fray_cap",
+    "white_half_cap",
     "yellow_cap",
-    "red_cap",
-    "circle_yellow",
-    "circle_white",
-    # "vitaminc",
-    # "paracap",
-    # "white",
-    # "white_medium",
-    # "white_small",
-    # "yellow",
-    # "sara",
-    # "oval",
+    "yellow_circle",
+
 ]
 
 
@@ -63,10 +60,14 @@ WINDOW_NAME = "Pill Inspector"
 
 # Classes to compare during prediction
 COMPARE_CLASSES = [
+#    "brown_cap",
+    "circle_gray",
+    # "cream",
+    # "oval",
+    # "red_fray_cap",
+    # "white_half_cap",
     # "yellow_cap",
-    # "red_cap",
-    # "circle_yellow",
-    "circle_white",
+    # "yellow_circle",
 ]
 
 

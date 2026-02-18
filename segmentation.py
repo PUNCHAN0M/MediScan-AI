@@ -72,7 +72,7 @@ def augment_images(input_dir, augment_count=5, rotation_step=30):
                     aug_img = cv2.flip(aug_img, 1)
                 
                 # 4. Brightness adjustment
-                brightness_delta = random.uniform(-50, 50)
+                brightness_delta = random.uniform(-10, 10)
                 aug_img = cv2.convertScaleAbs(aug_img, alpha=1.0, beta=brightness_delta)
                 
                 # Save augmented image
@@ -112,8 +112,8 @@ def process_directory_recursive(base_dir, augment_count=5, rotation_step=5):
 
 if __name__ == "__main__":
     # Configuration
-    BASE_DIR = "data/vitaminc/vitaminc_front/train/good"
-    AUGMENT_COUNT = 10
-    ROTATION_STEP = 10  # Rotation angle step (degrees) - will rotate at 0, 5, 10, 15, ..., 355
+    BASE_DIR = "data\\yellow_circle\\yellow\\train\\good"
+    AUGMENT_COUNT = 5
+    ROTATION_STEP = 30  # Rotation angle step (degrees) - will rotate at 0, 5, 10, 15, ..., 355
     
     process_directory_recursive(BASE_DIR, augment_count=AUGMENT_COUNT, rotation_step=ROTATION_STEP)

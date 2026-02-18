@@ -144,7 +144,7 @@ def draw_overlay(
 
 def run_camera(inspector: PillInspectorSIFE) -> None:
     """Main camera loop."""
-    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open camera {CAMERA_INDEX}")
     

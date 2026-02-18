@@ -9,6 +9,7 @@ Usage:
     from config.mobilenet import *      # MobileNet settings
     from config.resnet import *         # ResNet settings  
     from config.dinov2 import *         # DINOv2 settings
+    from config.cnnmultiscale import *  # CNN Multi-Scale settings
 """
 
 from config.base import (

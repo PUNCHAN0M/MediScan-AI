@@ -58,5 +58,6 @@ runs/
 temp/
 tmp/
 
-data/
-model/
+data/*
+data_yolo/
+model/*
