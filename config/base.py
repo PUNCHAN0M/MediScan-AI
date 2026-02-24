@@ -22,8 +22,8 @@ SAVE_DIR = Path("./data/inspected")
 # YOLO model paths
 # SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
 # DETECTION_MODEL_PATH = "model/yolo12-seg.pt"
-DETECTION_MODEL_PATH = "model/pill-detection-best.onnx"
-SEGMENTATION_MODEL_PATH = "model/pill-detection-best.onnx"
+DETECTION_MODEL_PATH = "model/pill-detection-best-2.pt"
+SEGMENTATION_MODEL_PATH = "model/pill-detection-best-2.pt"
 
 # =============================================================================
 #                           TRAINING CONFIGURATION
@@ -37,14 +37,17 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 # Classes to train (empty list = train all available classes)
 SELECTED_CLASSES = [
-    "brown_cap",
-    "circle_gray",
-    "cream",
-    "oval",
-    "red_fray_cap",
-    "white_half_cap",
-    "yellow_cap",
+    # "brown_cap_test",
+    # "brown_cap",
     "yellow_circle",
+    # "white_oval",
+    # "circle_gray",
+    # "cream",
+    # "oval",
+    # "red_fray_cap",
+    # "white_half_cap",
+    # "yellow_cap",
+    # "white_front"
 
 ]
 
@@ -54,20 +57,24 @@ SELECTED_CLASSES = [
 # =============================================================================
 
 # Camera settings
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 FRAMES_BEFORE_SUMMARY = 3
 WINDOW_NAME = "Pill Inspector"
 
 # Classes to compare during prediction
 COMPARE_CLASSES = [
-#    "brown_cap",
-    "circle_gray",
+    # "brown_cap_test",
+    # "brown_cap",
+    "yellow_circle",
+    # "white_oval",
+    # "circle_gray",
     # "cream",
     # "oval",
     # "red_fray_cap",
     # "white_half_cap",
     # "yellow_cap",
-    # "yellow_circle",
+    # "circle_yellow",
+    # "white_front",
 ]
 
 

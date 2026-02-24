@@ -12,17 +12,17 @@ from mobile_sife_cuda.core_predict.yolo_detector import OnnxYOLOModel, _load_yol
 # ─── Configuration ────────────────────────────────────────────────────────
 MODEL_PATH = SEGMENTATION_MODEL_PATH
 
-IMG_SIZE       = 640
-CONF_THRESHOLD = 0.25
+IMG_SIZE       = 1280
+CONF_THRESHOLD = 0.4
 IOU_THRESHOLD  = 0.45
 
 SAVE_BASE_DIR = "data"
-PILL_CATEGORY = "test/bad"               # ← เปลี่ยนตามต้องการ เช่น "paracetamol", "amoxicillin"
+PILL_CATEGORY = "brown_cap_test\\brown_cap_test\\train"               # ← เปลี่ยนตามต้องการ เช่น "paracetamol", "amoxicillin"
 SAVE_SUBDIR   = "good"                   # หรือ "cracked", "dirty", etc.
 SAVE_DIR      = os.path.join(SAVE_BASE_DIR, PILL_CATEGORY, SAVE_SUBDIR)
 
 CROP_MODE = "segmentation"                  # "segmentation" หรือ "detection"
-PAD_SEG   = 6                            # ใช้เฉพาะ segmentation (ป้องกันขอบเม็ดยาติด)
+PAD_SEG   = 0                            # ใช้เฉพาะ segmentation (ป้องกันขอบเม็ดยาติด)
 PAD       = PAD_SEG if CROP_MODE == "segmentation" else 0
 
 os.makedirs(SAVE_DIR, exist_ok=True)
@@ -37,7 +37,7 @@ print("Controls      : s = save crops | p = preview up to 6 | ESC = exit\n")
 def make_square_black_pad(img: np.ndarray) -> np.ndarray:
     """ทำให้ภาพเป็น square ด้วย padding สีดำรอบนอก (ใช้ max side เป็นขนาด)"""
     if img is None or img.size == 0:
-        return np.zeros((320, 320, 3), dtype=np.uint8)
+        return np.zeros((256, 256, 3), dtype=np.uint8)
 
     h, w = img.shape[:2]
     size = max(h, w)
@@ -49,7 +49,7 @@ def make_square_black_pad(img: np.ndarray) -> np.ndarray:
 
     square = np.zeros((size, size, 3), dtype=np.uint8)
     square[pad_top:pad_top + h, pad_left:pad_left + w] = img
-    return square
+    return cv2.resize(square, (256, 256))
 
 
 def preprocess_light(frame: np.ndarray) -> np.ndarray:
@@ -206,11 +206,12 @@ def main():
     model = load_model()
     actual_size = validate_imgsz(model, IMG_SIZE)
     print(f"Input size: {actual_size}\n")
+    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
 
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 780)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 640)
+    # Reset เป็น Auto Focus
+    cap.set(cv2.CAP_PROP_AUTOFOCUS, 1) 
 
+    # cap.release()
     if not cap.isOpened():
         print("Camera open failed")
         return

@@ -1,112 +1,71 @@
 """
-ResNet18 PatchCore Configuration
+ResNet50 PatchCore Configuration
 ================================
 
-การตั้งค่าสำหรับ ResNet18 backbone พร้อม Color Features.
+Backbone : ResNet50 (pretrained, frozen)
+Layers   : layer2 (512 ch) + layer3 (1024 ch) → concat → 1536-dim patches
+Detection: YOLOv12-seg (.pt / .onnx)
 
-🎯 Best for:
+Best for:
 - Color anomaly detection (white vs black pills)
-- Small colored defects (black spots, discoloration)
-- Pills with color-based quality criteria
+- Small coloured defects (black spots, discolouration)
+- Pills with colour-based quality criteria
 
-📊 Performance:
-- Speed: ⭐⭐⭐⭐ (Fast)
-- Texture: ⭐⭐⭐⭐
-- Color: ⭐⭐⭐⭐⭐ (Best)
-- Shape: ⭐⭐⭐⭐
+Performance:
+- Speed:   Fast  (ResNet50 + FAISS kNN, no backprop)
+- Texture: ★★★★
+- Color:   ★★★★★
+- Shape:   ★★★★
 """
 from pathlib import Path
 from config.base import DEFAULT_FALLBACK_THRESHOLD
 
 
 # =============================================================================
-#                         RESNET PATCHCORE PARAMETERS
+#  BACKBONE
 # =============================================================================
+BACKBONE = "resnet50"
+LAYERS = ["layer2", "layer3"]          # 512 + 1024 = 1536 dim/patch
 
-# Image preprocessing
-IMG_SIZE = 256                  # Input image size (pixels)
 
-# Patch extraction
-GRID_SIZE = 28                  # Smaller patches for color detection
-                                # More patches = better small defect detection
+# =============================================================================
+#  IMAGE / PATCH
+# =============================================================================
+IMG_SIZE = 256                          # input resolution
+GRID_SIZE = 16                          # patches per side  (16 → 256 patches)
 
-# Memory bank
-CORESET_RATIO = 0.12            # Ratio of patches to keep (0.0-1.0)
 
-# Anomaly scoring
-K_NEAREST = 11                  # Number of nearest neighbors for scoring
+# =============================================================================
+#  PATCHCORE
+# =============================================================================
+CORESET_RATIO = 0.25                    # fraction of patches to keep
+K_NEAREST = 3                           # kNN neighbours for scoring
 
-# Threshold
+
+# =============================================================================
+#  THRESHOLD
+# =============================================================================
 FALLBACK_THRESHOLD = DEFAULT_FALLBACK_THRESHOLD
 
 
 # =============================================================================
-#                              COLOR FEATURES
+#  SCORING
 # =============================================================================
-
-# Enable color feature extraction
-USE_COLOR_FEATURES = True       # Add RGB mean/std per patch
-
-# Enable HSV color space (recommended for color anomalies)
-USE_HSV = True                  # Add HSV mean/std per patch
-
-# Weight for color features (higher = more emphasis on color)
-COLOR_WEIGHT = 1.0              # Range: 0.5-2.0
+SCORE_METHOD = "top10_mean"              # "max" (sensitive) | "top5_mean" (balanced)
+# Multiplier applied to the calibrated threshold at inference.
+# 1.0 = trust calibration exactly.  > 1.0 = more lenient.  Tune without retraining.
+THRESHOLD_MULTIPLIER = 1.1
 
 
 # =============================================================================
-#                              MODEL OUTPUT PATH
+#  COLOR FEATURES  (optional, appended to CNN features)
 # =============================================================================
+USE_COLOR_FEATURES = True               # +6 dims (RGB mean/std)
+USE_HSV = True                          # +6 dims (HSV mean/std)
+COLOR_WEIGHT = 0.7                      # keep colour influence mild (was 1.0)
 
+
+# =============================================================================
+#  MODEL OUTPUT
+# =============================================================================
 MODEL_OUTPUT_DIR = Path("./model/patchcore_resnet")
-
-
-# =============================================================================
-#                              TUNING GUIDE
-# =============================================================================
-"""
-🔧 Parameter Tuning Guide for ResNet (Color-Aware):
-
-1. GRID_SIZE (Patch resolution):
-   - 24-28: Good for small colored defects (recommended)
-   - 28-32: Best for tiny spots, slower
-   - 20-24: Faster, may miss small defects
-   
-2. COLOR_WEIGHT (Color importance):
-   - 0.5-0.8: Texture more important than color
-   - 1.0: Balanced (default)
-   - 1.2-1.5: Color very important
-   - 1.5-2.0: Color critical (black/white separation)
-
-3. USE_HSV:
-   - True: Better color separation (recommended)
-   - False: Faster, RGB only
-
-📋 Preset Configurations:
-
-Color-Critical Mode (White vs Black pills):
-    GRID_SIZE = 28
-    CORESET_RATIO = 0.15
-    K_NEAREST = 19
-    COLOR_WEIGHT = 1.5
-    USE_HSV = True
-    
-Balanced Color Mode (Default):
-    GRID_SIZE = 28
-    CORESET_RATIO = 0.12
-    K_NEAREST = 11
-    COLOR_WEIGHT = 1.0
-    USE_HSV = True
-    
-Texture-Focused Mode:
-    GRID_SIZE = 24
-    CORESET_RATIO = 0.12
-    K_NEAREST = 11
-    COLOR_WEIGHT = 0.7
-    USE_HSV = False
-
-🎨 Color Anomaly Examples:
-- Black spots on white pills → COLOR_WEIGHT = 1.5
-- Discoloration → COLOR_WEIGHT = 1.2
-- Faded colors → USE_HSV = True, COLOR_WEIGHT = 1.3
-"""

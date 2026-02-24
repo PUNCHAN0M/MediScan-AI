@@ -72,6 +72,7 @@ from config.sife import (
     MULTI_SCALE_GRIDS,
     USE_EDGE_ENHANCEMENT,
     EDGE_WEIGHT,
+    FINETUNED_BACKBONE_PATH,
 )
 
 
@@ -548,6 +549,7 @@ def main():
         use_edge_enhancement=USE_EDGE_ENHANCEMENT,
         edge_weight=EDGE_WEIGHT,
         use_detailed_scoring=True,
+        finetuned_backbone_path=FINETUNED_BACKBONE_PATH,
     )
 
     inspector = PillInspectorSIFE(config)

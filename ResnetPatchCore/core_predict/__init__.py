@@ -1,16 +1,9 @@
-# ResnetPatchCore/core_predict/__init__.py
-"""Core prediction components for ResNet PatchCore."""
+"""Backward-compatibility shim — forwards to pipeline.infer."""
+from ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
 
-from .inspector import PillInspectorResNet, InspectorConfig
-from .visualizer import draw_pill_results, draw_summary, put_text_top_left, put_text_top_right, COLOR_ANOMALY, COLOR_NORMAL
+# Aliases so run_predict.py  `PillInspectorSIFE`  and old code work unchanged
+PillInspectorSIFE = PillInspector
+PillInspectorResNet = PillInspector
 
-__all__ = [
-    "PillInspectorResNet", 
-    "InspectorConfig",
-    "draw_pill_results",
-    "draw_summary",
-    "put_text_top_left",
-    "put_text_top_right",
-    "COLOR_ANOMALY",
-    "COLOR_NORMAL",
-]
+__all__ = ["PillInspector", "PillInspectorSIFE", "PillInspectorResNet",
+           "InspectorConfig"]

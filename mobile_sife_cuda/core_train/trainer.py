@@ -128,8 +128,8 @@ class PatchCoreSIFETrainer:
         bank: np.ndarray,
         ratio: float,
         rng: np.random.Generator,
-        min_keep: int = 1000,
-        keep_full_if_leq: int = 5000,
+        min_keep: int = 10000,
+        keep_full_if_leq: int = 15000,
     ) -> np.ndarray:
         """Random coreset subsampling for memory efficiency."""
         n = bank.shape[0]
@@ -174,12 +174,16 @@ class PatchCoreSIFETrainer:
         image_paths: List[Path],
         index: faiss.Index,
         image_exts: Sequence[str] = (".jpg", ".jpeg", ".png", ".bmp"),
+        use_detailed: bool = True,
     ) -> np.ndarray:
         """
         Score images in batches with parallel loading.
-        
+
+        use_detailed=True  → same scoring as inspector (get_anomaly_score_detailed)
+        use_detailed=False → simple max score
+
         Returns:
-            Array of max anomaly scores per image
+            Array of anomaly scores per image
         """
         paths = list(image_paths)
         scores: List[float] = []
@@ -206,10 +210,13 @@ class PatchCoreSIFETrainer:
             # Batch extract
             features_list = self.patchcore.extract_features_batch(images)
 
-            # Score each
+            # Score each — use same method as inspector — use same method as inspector
             for feats in features_list:
-                score = self.patchcore.get_max_anomaly_score(feats, index)
-                scores.append(score)
+                if use_detailed:
+                    s = self.patchcore.get_anomaly_score_detailed(feats, index)["score"]
+                else:
+                    s = self.patchcore.get_max_anomaly_score(feats, index)
+                scores.append(s)
 
         return np.array(scores, dtype=np.float32)
 
@@ -219,24 +226,28 @@ class PatchCoreSIFETrainer:
         test_good_dir: Path,
         fallback_threshold: float = 0.35,
         image_exts: Sequence[str] = (".jpg", ".jpeg", ".png", ".bmp"),
-        percentile: float = 98,
-        sigma: float = 3.0,
+        percentile: float = 97.0,
+        sigma: float = 3,
     ) -> float:
-        """Calibrate threshold from good images (percentile + sigma)."""
+        """Calibrate threshold from good images only (percentile + sigma).
+        Uses the same scoring method as the inspector (detailed scoring).
+        """
         image_paths = self.iter_images(test_good_dir, image_exts=image_exts)
         if not image_paths:
             return fallback_threshold
 
         index = self.patchcore.build_faiss_index(memory_bank)
-        scores = self._score_images(image_paths, index)
+        scores = self._score_images(image_paths, index, use_detailed=True)
 
         if scores.size == 0:
             return fallback_threshold
 
         mean_val = float(scores.mean())
-        std_val = float(scores.std())
-        p = float(np.percentile(scores, percentile))
-        return max(p, mean_val + sigma * std_val)
+        std_val  = float(scores.std())
+        p        = float(np.percentile(scores, percentile))
+        threshold = max(p, mean_val + sigma * std_val)
+        print(f"    Good scores  mean={mean_val:.4f} std={std_val:.4f} p{int(percentile)}={p:.4f} → thr={threshold:.4f}")
+        return threshold
 
     def calibrate_threshold_from_test_dir(
         self,
@@ -245,7 +256,7 @@ class PatchCoreSIFETrainer:
         good_folder: str = "good",
         fallback_threshold: float = 0.35,
         image_exts: Sequence[str] = (".jpg", ".jpeg", ".png", ".bmp"),
-        n_quantiles: int = 301,
+        n_quantiles: int = 351,
     ) -> float:
         """Calibrate threshold using good vs anomaly images with F1 optimization."""
         if not test_dir.exists() or not test_dir.is_dir():
@@ -270,9 +281,9 @@ class PatchCoreSIFETrainer:
         index = self.patchcore.build_faiss_index(memory_bank)
 
         print(f"    Scoring {len(good_paths)} good images...")
-        good_scores = self._score_images(good_paths, index)
+        good_scores = self._score_images(good_paths, index, use_detailed=True)
         print(f"    Scoring {len(bad_paths)} anomaly images...")
-        bad_scores = self._score_images(bad_paths, index)
+        bad_scores = self._score_images(bad_paths, index, use_detailed=True)
 
         if good_scores.size == 0 or bad_scores.size == 0:
             return self.calibrate_threshold_from_dir(

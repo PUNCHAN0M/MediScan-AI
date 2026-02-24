@@ -33,7 +33,7 @@ from config.base import DEFAULT_FALLBACK_THRESHOLD
 IMG_SIZE = 256                  # Input image size (pixels)
 
 # Patch extraction - SMALLER = detect smaller defects
-GRID_SIZE = 18                  # 🔥 40×40 = 1600 patches (จับ defect จิ๋วได้ดี)
+GRID_SIZE = 16                  # 🔥 40×40 = 1600 patches (จับ defect จิ๋วได้ดี)
                                 # ยิ่ง grid เยอะ ยิ่งเห็น defect เล็กๆ
 
 # Memory bank
@@ -44,7 +44,7 @@ K_NEAREST = 3                   # 🔥 k=3 โหดสุดสำหรับ 
                                 # k ยิ่งน้อย ยิ่ง sensitive (1-3 แนะนำ)
 
 # Threshold - LOWER = catch more defects  
-FALLBACK_THRESHOLD = 0.20       # 🔥 ลดเหลือ 0.20 (sensitive มากขึ้น)
+FALLBACK_THRESHOLD = 0.43       # 🔥 ลดเหลือ 0.20 (sensitive มากขึ้น)
 
 
 # =============================================================================
@@ -55,7 +55,7 @@ FALLBACK_THRESHOLD = 0.20       # 🔥 ลดเหลือ 0.20 (sensitive ม
 USE_SIFE = True                 # Add spatial/positional encoding to features
 
 # Position encoding dimension
-SIFE_DIM = 64                   # Dimension of spatial features (8-64)
+SIFE_DIM = 32                   # Dimension of spatial features (8-64)
                                 # Higher = more spatial detail, larger features
 
 # Position encoding type
@@ -108,9 +108,10 @@ EDGE_WEIGHT = 1.8               # 🔥 เพิ่มจาก 1.5 → 1.8 ส�
 # =============================================================================
 
 # Can combine with color features for maximum detection
-USE_COLOR_FEATURES = False      # Add RGB mean/std per patch
-USE_HSV = False                 # Add HSV mean/std per patch
-COLOR_WEIGHT = 1.0              # Weight for color features
+# 🔥 เปิด color features สำหรับ detect capsule สีผิดปกติ (2-tone anomaly)
+USE_COLOR_FEATURES = True       # Add RGB mean/std per patch
+USE_HSV = True                  # Add HSV mean/std per patch  ← ดีมากสำหรับ hue shift
+COLOR_WEIGHT = 2.0              # 🔥 weight สูง: สีสำคัญที่สุดสำหรับ capsule case
 
 
 # =============================================================================
@@ -129,6 +130,21 @@ TOP_K_PERCENT = 0.05            # Top 5% patches for top-k mean
 # =============================================================================
 
 MODEL_OUTPUT_DIR = Path("./model/patchcore_sife")
+
+
+# =============================================================================
+#                    🔥 FINE-TUNED BACKBONE (Optional)
+# =============================================================================
+# หลังจาก run run_finetune_backbone.py แล้ว ให้ uncomment บรรทัดด้านล่าง
+# เพื่อให้ PatchCoreSIFE โหลด backbone ที่ fine-tune กับ dataset ของเราแล้ว
+# แทน raw IMAGENET1K_V1
+#
+# None  = ใช้ IMAGENET1K_V1 ดั้งเดิม (default)
+# Path  = โหลด fine-tuned features จากไฟล์ที่ระบุ
+#
+FINETUNED_BACKBONE_PATH = None
+# FINETUNED_BACKBONE_PATH = Path("./backbone_mbn_pill.pth")
+
 
 
 # =============================================================================

@@ -84,6 +84,8 @@ class PatchCoreSIFE:
         top_k_percent: float = 0.05,
         # FAISS GPU
         use_faiss_gpu: bool = True,
+        # Fine-tuned backbone
+        finetuned_backbone_path: str = None,
     ):
         # --- Device ---
         self.device = get_optimal_device() if device is None else torch.device(device)
@@ -128,6 +130,9 @@ class PatchCoreSIFE:
         # FAISS
         self.use_faiss_gpu = use_faiss_gpu and check_faiss_gpu()
 
+        # Fine-tuned backbone path
+        self._finetuned_backbone_path = finetuned_backbone_path
+
         # --- Backbone ---
         self._init_backbone()
 
@@ -156,8 +161,47 @@ class PatchCoreSIFE:
     # =============================================================
 
     def _init_backbone(self) -> None:
-        """Load MobileNetV3-Large and register hooks for multi-layer features."""
+        """Load MobileNetV3-Large and register hooks for multi-layer features.
+
+        If `finetuned_backbone_path` is set, loads fine-tuned feature weights
+        (produced by run_finetune_backbone.py) on top of IMAGENET1K_V1.
+        """
+        import torch as _torch
         backbone = models.mobilenet_v3_large(weights="IMAGENET1K_V1")
+
+        # Load fine-tuned weights when available
+        if self._finetuned_backbone_path is not None:
+            ckpt_path = self._finetuned_backbone_path
+            if hasattr(ckpt_path, '__fspath__'):
+                ckpt_path = str(ckpt_path)
+            try:
+                ckpt = _torch.load(ckpt_path, map_location="cpu")
+                state = ckpt.get("features_state_dict", ckpt.get("full_state_dict"))
+                if state is not None:
+                    # Load only the features part (prefix "features.")
+                    if "features_state_dict" in ckpt:
+                        backbone.features.load_state_dict(state, strict=True)
+                    else:
+                        # full state dict: filter features keys
+                        feat_state = {
+                            k[len("features."):]: v
+                            for k, v in state.items()
+                            if k.startswith("features.")
+                        }
+                        backbone.features.load_state_dict(feat_state, strict=True)
+                    meta = ckpt.get("meta", {})
+                    print(
+                        f"  [Backbone] Loaded fine-tuned weights from '{ckpt_path}' "
+                        f"(val_acc={meta.get('best_val_acc','?'):})"
+                    )
+                else:
+                    print(f"  [Backbone] WARNING: checkpoint has no state_dict key, using IMAGENET1K_V1")
+            except Exception as e:
+                print(f"  [Backbone] WARNING: could not load '{ckpt_path}': {e}")
+                print(f"  [Backbone] Falling back to IMAGENET1K_V1")
+        else:
+            print("  [Backbone] Using IMAGENET1K_V1 weights (no fine-tuned path set)")
+
         self.backbone = backbone.to(self.device).eval()
 
         for p in self.backbone.parameters():

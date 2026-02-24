@@ -27,14 +27,14 @@ from config.base import DEFAULT_FALLBACK_THRESHOLD
 IMG_SIZE = 256                  # Input image size (pixels)
 
 # Patch extraction
-GRID_SIZE = 20                  # Grid size for patches (20×20 = 400 patches)
+GRID_SIZE = 16                  # Grid size for patches (20×20 = 400 patches)
 
 # Memory bank
-CORESET_RATIO = 0.12            # Ratio of patches to keep (0.0-1.0)
+CORESET_RATIO = 1            # Ratio of patches to keep (0.0-1.0)
                                 # Higher = more coverage, slower inference
 
 # Anomaly scoring
-K_NEAREST = 11                  # Number of nearest neighbors for scoring
+K_NEAREST = 3                  # Number of nearest neighbors for scoring
                                 # Higher = smoother scores, less sensitive
 
 # Threshold

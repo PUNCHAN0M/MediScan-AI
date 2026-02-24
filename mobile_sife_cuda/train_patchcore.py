@@ -41,6 +41,7 @@ from config.sife import (
     K_NEAREST,
     FALLBACK_THRESHOLD,
     MODEL_OUTPUT_DIR,
+    FINETUNED_BACKBONE_PATH,
     USE_SIFE,
     SIFE_DIM,
     SIFE_ENCODING_TYPE,
@@ -296,6 +297,7 @@ def main():
         multi_scale_grids=MULTI_SCALE_GRIDS,
         use_edge_enhancement=USE_EDGE_ENHANCEMENT,
         edge_weight=EDGE_WEIGHT,
+        finetuned_backbone_path=FINETUNED_BACKBONE_PATH,
     )
 
     trainer = PatchCoreSIFETrainer(

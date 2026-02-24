@@ -1,16 +1,49 @@
-# ResnetPatchCore/__init__.py
 """
-ResNet18-based PatchCore for Anomaly Detection.
+ResnetPatchCore — Production PatchCore for Pill Inspection
+==========================================================
 
-ResNet18 advantages:
-- Better color awareness than MobileNet/DINOv2
-- Shallower features preserve color information
-- Fast and lightweight
-- Combined with explicit color features for pill inspection
+Backbone : ResNet50  (pretrained, frozen)
+Layers   : layer2 (512 ch) + layer3 (1024 ch)  → concat → 1536-dim patches
+Scoring  : FAISS kNN (cosine similarity)
+Detection: YOLOv12-seg  (.pt + .onnx)
+
+Modules
+-------
+``segmentation``  — YOLOSegmentor  (detect + mask-crop pills)
+``patchcore``     — feature extractor, memory bank, scorer
+``pipeline``      — train / infer / visualizer
+
+Quick start
+-----------
+::
+
+    # training
+    python run_train.py --model=resnet
+
+    # realtime camera
+    python run_realtime.py --model=resnet
+
+    # folder prediction
+    python run_predict.py --model=resnet --input=data_yolo/test
 """
+from ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from ResnetPatchCore.patchcore.memory_bank import MemoryBank, CoresetSampler
+from ResnetPatchCore.patchcore.scorer import PatchCoreScorer
+from ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor, PillDetection
+from ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
+from ResnetPatchCore.pipeline.train import TrainPipeline
 
-from .core_shared import ResNetPatchCore
-from .core_train import ResNetPatchCoreTrainer
-from .core_predict import PillInspectorResNet, InspectorConfig
-
-__all__ = ["ResNetPatchCore", "ResNetPatchCoreTrainer", "PillInspectorResNet", "InspectorConfig"]
+__all__ = [
+    # patchcore
+    "ResNet50FeatureExtractor",
+    "MemoryBank",
+    "CoresetSampler",
+    "PatchCoreScorer",
+    # segmentation
+    "YOLOSegmentor",
+    "PillDetection",
+    # pipeline
+    "PillInspector",
+    "InspectorConfig",
+    "TrainPipeline",
+]

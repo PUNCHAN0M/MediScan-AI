@@ -112,8 +112,8 @@ def process_directory_recursive(base_dir, augment_count=5, rotation_step=5):
 
 if __name__ == "__main__":
     # Configuration
-    BASE_DIR = "data\\yellow_circle\\yellow\\train\\good"
-    AUGMENT_COUNT = 5
-    ROTATION_STEP = 30  # Rotation angle step (degrees) - will rotate at 0, 5, 10, 15, ..., 355
+    BASE_DIR = "data\\yellow_circle\\yellow_circle\\train\\good"
+    AUGMENT_COUNT = 2
+    ROTATION_STEP = 15  # Rotation angle step (degrees) - will rotate at 0, 5, 10, 15, ..., 355
     
     process_directory_recursive(BASE_DIR, augment_count=AUGMENT_COUNT, rotation_step=ROTATION_STEP)

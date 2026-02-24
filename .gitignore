@@ -61,3 +61,13 @@ tmp/
 data/*
 data_yolo/
 model/*
+
+augmentation_result_1
+result
+.results_yolo/
+result_1class_1img
+result_backup
+result_fcdd
+result_mobile_sife_cuda
+result_predict_test
+result_resnet
