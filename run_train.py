@@ -28,35 +28,35 @@ ROOT = Path(__file__).parent
 
 MODEL_REGISTRY = {
     "mobile_sife_cuda": {
-        "script": "mobile_sife_cuda/train_patchcore.py",
+        "script": "Core_mobile_sife_cuda/train_patchcore.py",
         "desc": "MobileNet + SIFE PatchCore (CUDA Optimized)",
     },
     "mobilenet_sife": {
-        "script": "MobilenetSIFE/train_patchcore.py",
+        "script": "Core_MobilenetSIFE/train_patchcore.py",
         "desc": "MobileNet + SIFE PatchCore",
     },
     "mobilenet": {
-        "script": "MobilenetPatchCore/train_patchcore.py",
+        "script": "Core_MobilenetPatchCore/train_patchcore.py",
         "desc": "MobileNet PatchCore",
     },
     "resnet": {
-        "script": "ResnetPatchCore/train_patchcore.py",
+        "script": "Core_ResnetPatchCore/train_patchcore.py",
         "desc": "ResNet50 PatchCore (Color-Aware)",
     },
     "dinov2": {
-        "script": "DINOv2PatchCore/train_patchcore_dinov2.py",
+        "script": "Core_DINOv2PatchCore/train_patchcore_dinov2.py",
         "desc": "DINOv2 PatchCore",
     },
     "cnn_multiscale": {
-        "script": "CNNMultiScale/train_patchcore.py",
+        "script": "Core_CNNMultiScale/train_patchcore.py",
         "desc": "CNN Multi-Scale PatchCore (Tiny Defect)",
     },
     "wideresnet": {
-        "script": "WideResnetAnomalyCore/train_patchcore.py",
+        "script": "Core_WideResnetAnomaly/train_patchcore.py",
         "desc": "WideResNet50 PatchCore",
     },
     "fcdd": {
-        "script": "FCDD/fcdd_train.py",
+        "script": "Core_FCDD/fcdd_train.py",
         "desc": "FCDD Anomaly Detection",
     },
 }
@@ -86,6 +86,14 @@ def main():
         action="store_true",
         help="List available models",
     )
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to a custom backbone .pth file forwarded to the model script "
+             "(e.g. --backbone=resnet_backbone.pth). Currently supported by: resnet.",
+    )
 
     args = parser.parse_args()
 
@@ -104,8 +112,14 @@ def main():
 
     print(f"Training: {info['desc']}")
     print(f"Script  : {script}")
+    if args.backbone:
+        print(f"Backbone: {args.backbone}")
     print("=" * 50)
-    subprocess.run([sys.executable, str(script)])
+
+    cmd = [sys.executable, str(script)]
+    if args.backbone:
+        cmd += ["--backbone", args.backbone]
+    subprocess.run(cmd)
 
 
 if __name__ == "__main__":

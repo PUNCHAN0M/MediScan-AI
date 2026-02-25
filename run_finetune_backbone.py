@@ -15,30 +15,23 @@ Dataset format expected:
         └── image2.jpg
 
 Output:
-    model/{model_name}_backbone.pth   ← โหลดไปใช้กับ PatchCoreSIFE ต่อ
+    model/{model_name}_backbone_{timestamp}.pth   ← โหลดไปใช้กับ PatchCoreSIFE ต่อ
 
 Usage:
     python run_finetune_backbone.py --model=mobilenet
     python run_finetune_backbone.py --model=resnet
-    python run_finetune_backbone.py --model=efficientnet
-    python run_finetune_backbone.py --model=inception
     python run_finetune_backbone.py --model=dinov2
-
-Output:
-    backbone_path : model/{model_name}_backbone.pth
 
 Flow:
     Stage 1 (Warmup)  : Freeze backbone → Train classifier only       (5 epochs)
     Stage 2 (Finetune): Unfreeze last 3 InvertedResidual blocks + train (remaining epochs)
-
-ผลลัพธ์ที่ได้ backbone จะ "รู้จัก" domain ยาของเราดีขึ้น และ features
-ที่สกัดได้จะ discriminative กว่าการใช้ raw IMAGENET1K_V1
 """
 
 import argparse
 import sys
 import time
 from pathlib import Path
+from datetime import datetime
 
 import torch
 import torch.nn as nn
@@ -53,30 +46,25 @@ from PIL import Image
 #                              DEFAULTS
 # =============================================================================
 
-DEFAULT_DATA_DIR   = Path("augmentation_result_1")  # folder with subfolders for each class
-DEFAULT_OUTPUT     = Path(f"model/backbone/{model}.pth")
-DEFAULT_EPOCHS     = 1#50
-DEFAULT_WARMUP     = 1#5          # epochs to train classifier-only first
-DEFAULT_LR         = 1e-4       # learning rate for finetune stage
-DEFAULT_LR_HEAD    = 1e-3       # learning rate for classifier head (warmup)
+DEFAULT_DATA_DIR   = Path("augmentation_result_1")
+DEFAULT_OUTPUT_DIR = Path("model/")          # ✅ เปลี่ยนเป็นโฟลเดอร์แทนไฟล์
+DEFAULT_EPOCHS     = 10                      # ✅ ปรับค่า default ให้เหมาะสม
+DEFAULT_WARMUP     = 5
+DEFAULT_LR         = 1e-4
+DEFAULT_LR_HEAD    = 1e-3
 DEFAULT_BATCH      = 32
-DEFAULT_VAL_SPLIT  = 0.25       # 15% of data used for validation
+DEFAULT_VAL_SPLIT  = 0.25
 DEFAULT_IMG_SIZE   = 256
 DEFAULT_WORKERS    = 4
-DEFAULT_UNFREEZE   = 3          # number of feature blocks to unfreeze in stage 2
+DEFAULT_UNFREEZE   = 3
 
 
 # =============================================================================
 #                         MODULE-LEVEL DATASET HELPER
 # =============================================================================
-# Must be at module level (not inside a function) so Windows multiprocessing
-# can pickle it for DataLoader workers.
 
 class TransformSubset(Dataset):
-    """
-    Wraps a Subset and applies a different transform.
-    Re-loads images from disk so val transforms don't see augmented tensors.
-    """
+    """Wraps a Subset and applies a different transform."""
     def __init__(self, subset, transform):
         self.subset    = subset
         self.transform = transform
@@ -95,21 +83,30 @@ class TransformSubset(Dataset):
 # =============================================================================
 
 def get_transforms(img_size: int):
-    """Return train / val transforms."""
+    """Return train / val transforms (Optimized for pre-augmented dataset)."""
     mean = [0.485, 0.456, 0.406]
     std  = [0.229, 0.224, 0.225]
 
     train_tf = transforms.Compose([
-        transforms.Resize((img_size + 32, img_size + 32)),
-        transforms.RandomCrop(img_size),
+        # ✅ ใช้ RandomResizedCrop แทน Resize+Crop เดิม
+        # scale=(0.9, 1.0) = ซูมเข้าไม่เกิน 10% (ไม่รุนแรงเกินไป)
+        transforms.RandomResizedCrop(img_size, scale=(0.9, 1.0)),
+        
+        # ✅ ยังคง Flip ไว้ (ใช้ร่วมกันได้ ไม่เสียหาย)
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
-        transforms.RandomRotation(15),
+        
+        # ✅ ยังคง Color Jitter ไว้ (สำคัญมากกัน Overfitting)
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.02),
+        
+        # ✅ ลด Rotation ลง (เพราะ Offline ทำมาหนักแล้ว)
+        transforms.RandomRotation(10),
+        
         transforms.ToTensor(),
         transforms.Normalize(mean, std),
     ])
 
+    # ✅ Validation ไม่ต้อง Augment (เอาแค่ชัวร์ว่าขนาดตรง)
     val_tf = transforms.Compose([
         transforms.Resize((img_size, img_size)),
         transforms.CenterCrop(img_size),
@@ -125,19 +122,11 @@ def get_transforms(img_size: int):
 # =============================================================================
 
 def build_datasets(data_dir: Path, img_size: int, val_split: float, seed: int = 42):
-    """
-    Load ImageFolder dataset and split into train/val.
-
-    Folders ending with ' - Copy' are merged into their original class
-    by using the same label. ImageFolder assigns labels alphabetically,
-    so we load with a custom target_transform to unify duplicates.
-    """
-    # Collect valid class dirs (skip empty folders)
+    """Load ImageFolder dataset and split into train/val."""
     all_class_dirs = sorted([d for d in data_dir.iterdir() if d.is_dir()])
     if not all_class_dirs:
         raise ValueError(f"No subdirectories found in {data_dir}")
 
-    # Each folder = its own class (including ' - Copy' folders)
     unique_classes = sorted([d.name for d in all_class_dirs])
     class_to_idx = {c: i for i, c in enumerate(unique_classes)}
     num_classes = len(unique_classes)
@@ -146,27 +135,20 @@ def build_datasets(data_dir: Path, img_size: int, val_split: float, seed: int = 
     print(f"  Total folders: {len(all_class_dirs)}")
     print(f"  Classes      : {num_classes}")
 
-    # Load with full transform for display, but use custom loader
     train_tf, val_tf = get_transforms(img_size)
-
-    # ImageFolder — already assigns one label per folder alphabetically
     raw_dataset = datasets.ImageFolder(str(data_dir), transform=train_tf)
 
-    # Count per class
     from collections import Counter
     counts = Counter(raw_dataset.targets)
     for cls, idx in sorted(raw_dataset.class_to_idx.items(), key=lambda x: x[1]):
         print(f"    [{idx:3d}] {cls:<60s} {counts[idx]:4d} images")
 
-    # Split train / val
     n_total = len(raw_dataset)
     n_val   = max(1, int(n_total * val_split))
     n_train = n_total - n_val
 
     torch.manual_seed(seed)
     train_ds, val_ds = random_split(raw_dataset, [n_train, n_val])
-
-    # Val set needs different transform (module-level class so Windows can pickle it)
     val_ds_final = TransformSubset(val_ds, val_tf)
 
     print(f"\n  Train samples: {n_train}   Val samples: {n_val}")
@@ -178,10 +160,7 @@ def build_datasets(data_dir: Path, img_size: int, val_split: float, seed: int = 
 # =============================================================================
 
 def build_model(num_classes: int, device: torch.device, model_name: str) -> nn.Module:
-    """
-    Build backbone model by name.
-    Supported: mobilenet, resnet, dinov2, efficientnet, inception
-    """
+    """Build backbone model by name."""
     if model_name == "mobilenet":
         model = models.mobilenet_v3_large(weights="IMAGENET1K_V1")
         in_features = model.classifier[-1].in_features
@@ -212,22 +191,16 @@ def build_model(num_classes: int, device: torch.device, model_name: str) -> nn.M
 
 
 def _get_head_and_backbone_blocks(model: nn.Module):
-    """
-    Returns (head_module, list_of_backbone_block_modules) for any supported architecture.
-    backbone_blocks are ordered first→last (deeper layers at the end).
-    """
+    """Returns (head_module, list_of_backbone_block_modules)."""
     if hasattr(model, "features"):
-        # MobileNetV3, EfficientNet — backbone is model.features (Sequential)
         head = model.classifier if hasattr(model, "classifier") else model.head
         return head, list(model.features)
     elif hasattr(model, "layer4"):
-        # ResNet — backbone blocks are layer1..layer4
         head   = model.fc
         blocks = [getattr(model, n) for n in ("layer1", "layer2", "layer3", "layer4")
                   if hasattr(model, n)]
         return head, blocks
     elif hasattr(model, "blocks"):
-        # DINOv2 / ViT style
         head = model.head
         return head, list(model.blocks)
     else:
@@ -238,14 +211,7 @@ def _get_head_and_backbone_blocks(model: nn.Module):
 
 
 def set_trainable(model: nn.Module, stage: str, n_unfreeze_blocks: int = 3) -> None:
-    """
-    Control which parts of the model are trainable.
-
-    stage='warmup'  → only classifier head trainable
-    stage='finetune'→ classifier + last n_unfreeze_blocks backbone blocks
-    stage='full'    → everything trainable
-    """
-    # Freeze everything first
+    """Control which parts of the model are trainable."""
     for p in model.parameters():
         p.requires_grad = False
 
@@ -356,19 +322,29 @@ def evaluate(
 
 
 # =============================================================================
-#                              SAVE / LOAD
+#                              ✅ SAVE / LOAD (MODIFIED)
 # =============================================================================
 
-def save_backbone(model: nn.Module, output_path: Path, meta: dict) -> None:
+def save_backbone(model: nn.Module, output_dir: Path, model_name: str, meta: dict) -> Path:
     """
     Save fine-tuned backbone + metadata.
-    Saves full state_dict always; also saves features_state_dict when available.
+    
+    ✅ Auto-generate filename based on model_name + timestamp
+    Format: model/{model_name}_backbone_{timestamp}.pth
     """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # ✅ Generate filename with timestamp to prevent overwriting
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{model_name}_backbone_{timestamp}.pth"
+    output_path = output_dir / filename
+    
     checkpoint: dict = {
         "full_state_dict": model.state_dict(),
         "meta"           : meta,
+        "model_name"     : model_name,  # ✅ Save model name in checkpoint
     }
+    
     # Save feature extractor portion separately when accessible
     if hasattr(model, "features"):
         checkpoint["features_state_dict"] = model.features.state_dict()
@@ -377,9 +353,17 @@ def save_backbone(model: nn.Module, output_path: Path, meta: dict) -> None:
             k: v for k, v in model.state_dict().items()
             if not k.startswith("fc.")
         }
+    
     torch.save(checkpoint, output_path)
-    print(f"\n  Backbone saved → {output_path}")
+    
+    # ✅ Print clear output message
+    print(f"\n  {'='*60}")
+    print(f"  💾 Backbone saved → {output_path}")
+    print(f"  {'='*60}")
     print(f"  Metadata: {meta}")
+    print(f"  {'='*60}\n")
+    
+    return output_path
 
 
 # =============================================================================
@@ -392,43 +376,36 @@ def main():
                         choices=["mobilenet", "resnet", "dinov2", "efficientnet", "inception"],
                         help="Backbone model to finetune")
     parser.add_argument("--data_dir",  type=Path,  default=DEFAULT_DATA_DIR)
-    parser.add_argument("--output",    type=Path,  default=None)
+    parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR,  # ✅ Changed to output_dir
+                        help="Output directory for saved backbone")
     parser.add_argument("--epochs",    type=int,   default=DEFAULT_EPOCHS)
-    parser.add_argument("--warmup",    type=int,   default=DEFAULT_WARMUP,
-                        help="Epochs for warmup stage (classifier only)")
-    parser.add_argument("--lr",        type=float, default=DEFAULT_LR,
-                        help="LR for fine-tune stage (backbone)")
-    parser.add_argument("--lr_head",   type=float, default=DEFAULT_LR_HEAD,
-                        help="LR for warmup stage (head only)")
+    parser.add_argument("--warmup",    type=int,   default=DEFAULT_WARMUP)
+    parser.add_argument("--lr",        type=float, default=DEFAULT_LR)
+    parser.add_argument("--lr_head",   type=float, default=DEFAULT_LR_HEAD)
     parser.add_argument("--batch",     type=int,   default=DEFAULT_BATCH)
     parser.add_argument("--val_split", type=float, default=DEFAULT_VAL_SPLIT)
     parser.add_argument("--img_size",  type=int,   default=DEFAULT_IMG_SIZE)
     parser.add_argument("--workers",   type=int,   default=DEFAULT_WORKERS)
-    parser.add_argument("--unfreeze",  type=int,   default=DEFAULT_UNFREEZE,
-                        help="Number of feature blocks to unfreeze in stage 2")
+    parser.add_argument("--unfreeze",  type=int,   default=DEFAULT_UNFREEZE)
     parser.add_argument("--seed",      type=int,   default=42)
     parser.add_argument("--no_amp",    action="store_true", help="Disable AMP")
     args = parser.parse_args()
-
-    # Set output path if not specified
-    if args.output is None:
-        args.output = Path(f"model/backbone/{args.model}_backbone.pth")
 
     # ── Device ──────────────────────────────────────────────────────────────
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     use_amp = (device.type == "cuda") and (not args.no_amp)
     scaler  = torch.amp.GradScaler("cuda") if use_amp else None
 
-    # ── GPU optimisations ────────────────────────────────────────────────────
     if device.type == "cuda":
-        torch.backends.cudnn.benchmark   = True   # auto-tune conv kernels
-        torch.backends.cudnn.deterministic = False  # allow non-deterministic (faster)
+        torch.backends.cudnn.benchmark   = True
+        torch.backends.cudnn.deterministic = False
+        
     print(f"\n{'='*60}")
-    print(f"  Fine-tune {args.model} Backbone")
+    print(f"  Fine-tune {args.model.upper()} Backbone")
     print(f"{'='*60}")
     print(f"  Device   : {device}  (AMP={use_amp})")
     print(f"  Data dir : {args.data_dir}")
-    print(f"  Output   : {args.output}")
+    print(f"  Output   : {args.output_dir}")
     print(f"  Epochs   : {args.epochs}  (warmup={args.warmup})")
 
     # ── Dataset ─────────────────────────────────────────────────────────────
@@ -442,7 +419,7 @@ def main():
         prefetch_factor=2 if args.workers > 0 else None,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch * 2, shuffle=False,   # 2× batch for eval
+        val_ds, batch_size=args.batch * 2, shuffle=False,
         num_workers=args.workers, pin_memory=(device.type == "cuda"),
         persistent_workers=(args.workers > 0),
         prefetch_factor=2 if args.workers > 0 else None,
@@ -456,7 +433,7 @@ def main():
     best_state   = None
 
     # ══════════════════════════════════════════════════════════════
-    #  STAGE 1 — Warmup: train classifier head only
+    #  STAGE 1 — Warmup
     # ══════════════════════════════════════════════════════════════
     print(f"\n{'─'*60}")
     print(f"  STAGE 1: WARMUP  ({args.warmup} epochs)")
@@ -488,7 +465,7 @@ def main():
             best_state   = {k: v.clone() for k, v in model.state_dict().items()}
 
     # ══════════════════════════════════════════════════════════════
-    #  STAGE 2 — Fine-tune: unfreeze last N blocks + classifier
+    #  STAGE 2 — Fine-tune
     # ══════════════════════════════════════════════════════════════
     finetune_epochs = args.epochs - args.warmup
     if finetune_epochs > 0:
@@ -498,8 +475,6 @@ def main():
 
         set_trainable(model, "finetune", n_unfreeze_blocks=args.unfreeze)
 
-        # Differential LR: backbone gets lower LR than head
-        # Identify head param names dynamically
         head, _ = _get_head_and_backbone_blocks(model)
         head_param_ids = {id(p) for p in head.parameters()}
         backbone_params = [
@@ -540,7 +515,8 @@ def main():
         model.load_state_dict(best_state)
         print(f"\n  Restored best checkpoint  (val_acc={best_val_acc*100:.2f}%)")
 
-    save_backbone(model, args.output, {
+    # ✅ Save with auto-generated filename based on model_name
+    saved_path = save_backbone(model, args.output_dir, args.model, {
         "num_classes"    : num_classes,
         "img_size"       : args.img_size,
         "epochs"         : args.epochs,
@@ -549,9 +525,9 @@ def main():
         "unfreeze_blocks": args.unfreeze,
     })
 
-    print(f"\n  Done!  Best val accuracy: {best_val_acc*100:.2f}%")
-    print(f"  Load in PatchCoreSIFE by setting:\n")
-    print(f"    FINETUNED_BACKBONE_PATH = Path(\"{args.output}\")")
+    print(f"\n  ✅ Done!  Best val accuracy: {best_val_acc*100:.2f}%")
+    print(f"  💡 Load in PatchCoreSIFE by setting:\n")
+    print(f"    FINETUNED_BACKBONE_PATH = Path(\"{saved_path}\")")
     print(f"  in config/sife.py\n")
 
 

@@ -31,9 +31,9 @@ from pathlib import Path
 from PIL import Image
 from typing import Dict, List, Optional, Set
 
-from ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
-from ResnetPatchCore.patchcore.memory_bank import MemoryBank
-from ResnetPatchCore.patchcore.scorer import PatchCoreScorer
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
+from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
 
 
 class TrainPipeline:
@@ -51,6 +51,10 @@ class TrainPipeline:
         Used when calibration data is absent.
     k_nearest : int
         ``k`` for kNN scoring during threshold calibration.
+    score_method : str
+        Scoring method used for threshold calibration **and** inference.
+        Must match what the inspector uses at predict time.
+        One of: ``"max"`` | ``"top1_mean"`` | ``"top5_mean"`` | ``"top10_mean"``.
     """
 
     IMAGE_EXTS: Set[str] = {".jpg", ".jpeg", ".png", ".bmp"}
@@ -62,12 +66,14 @@ class TrainPipeline:
         seed: int = 42,
         fallback_threshold: float = 0.50,
         k_nearest: int = 3,
+        score_method: str = "max",
     ):
         self.extractor = extractor
         self.coreset_ratio = coreset_ratio
         self.seed = seed
         self.fallback_threshold = fallback_threshold
         self.k_nearest = k_nearest
+        self.score_method = score_method
 
     # ─────────────────── helpers ───────────────────
     @classmethod
@@ -144,6 +150,7 @@ class TrainPipeline:
             "grid_size": self.extractor.grid_size,
             "feature_dim": self.extractor.feature_dim,
             "k_nearest": self.k_nearest,
+            "score_method": self.score_method,   # ← saved so inference can match exactly
             "use_color_features": self.extractor.use_color_features,
             "use_hsv": self.extractor.use_hsv,
             "color_weight": self.extractor.color_weight,
@@ -158,50 +165,37 @@ class TrainPipeline:
     def _calibrate(
         self,
         memory_bank: np.ndarray,
-        test_dir: Optional[Path],
+        test_dir: Optional[Path] = None,   # ← ไม่ใช้แล้ว
     ) -> float:
         """
-        Calibrate decision threshold.
-
-        Strategy
-        --------
-        1. ``test_dir`` has ``good/`` + other dirs (bad) → F1-optimal sweep
-        2. ``test_dir`` has ``good/`` only → percentile 99.5  or  mean + 3σ
-        3. Fallback
+        Calibrate using BAD_DIR only (no good images).
         """
-        if test_dir is None or not test_dir.is_dir():
-            return self.fallback_threshold
 
-        good_dir = test_dir / "good"
-        good_paths = self.list_images(good_dir)
-        if not good_paths:
+        from config.base import BAD_DIR
+
+        bad_dir = Path(BAD_DIR)
+        bad_paths = self.list_images(bad_dir)
+
+        if not bad_paths:
+            print("    [Calibrate] No BAD images → fallback")
             return self.fallback_threshold
 
         scorer = PatchCoreScorer(k_nearest=self.k_nearest)
         index = scorer.build_index(memory_bank)
 
-        good_scores = self._score_paths(good_paths, scorer, index)
+        bad_scores = self._score_paths(bad_paths, scorer, index)
 
-        # look for bad images
-        bad_paths: List[Path] = []
-        for d in sorted(test_dir.iterdir()):
-            if d.is_dir() and d.name != "good":
-                bad_paths.extend(self.list_images(d))
+        if not bad_scores:
+            print("    [Calibrate] No bad scores → fallback")
+            return self.fallback_threshold
 
-        if bad_paths:
-            bad_scores = self._score_paths(bad_paths, scorer, index)
-            if good_scores and bad_scores:
-                return self._f1_sweep(np.array(good_scores),
-                                      np.array(bad_scores))
+        arr = np.array(bad_scores, dtype=np.float32)
 
-        # good-only calibration
-        if good_scores:
-            arr = np.array(good_scores, dtype=np.float32)
-            pctl = float(np.percentile(arr, 99.5))
-            sigma = float(arr.mean() + 3.0 * arr.std())
-            return max(pctl, sigma)
+        # ใช้ percentile ต่ำ ๆ ของ bad เป็น threshold
+        threshold = float(np.percentile(arr, 5.0))
 
-        return self.fallback_threshold
+        print(f"    [Calibrate] BAD-only threshold (p5): {threshold:.4f}")
+        return threshold
 
     def _score_paths(
         self,
@@ -214,7 +208,9 @@ class TrainPipeline:
             try:
                 pil = Image.open(p).convert("RGB")
                 patches = self.extractor.extract(pil)
-                scores.append(scorer.score_pill(patches, index))
+                # use the SAME score_method that will be used at inference
+                scores.append(scorer.score_pill(patches, index,
+                                                method=self.score_method))
             except Exception:
                 pass
         return scores

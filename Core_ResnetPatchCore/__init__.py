@@ -1,5 +1,5 @@
 """
-ResnetPatchCore — Production PatchCore for Pill Inspection
+Core_ResnetPatchCore — Production PatchCore for Pill Inspection
 ==========================================================
 
 Backbone : ResNet50  (pretrained, frozen)
@@ -26,12 +26,12 @@ Quick start
     # folder prediction
     python run_predict.py --model=resnet --input=data_yolo/test
 """
-from ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
-from ResnetPatchCore.patchcore.memory_bank import MemoryBank, CoresetSampler
-from ResnetPatchCore.patchcore.scorer import PatchCoreScorer
-from ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor, PillDetection
-from ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
-from ResnetPatchCore.pipeline.train import TrainPipeline
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank, CoresetSampler
+from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
+from Core_ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor, PillDetection
+from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
+from Core_ResnetPatchCore.pipeline.train import TrainPipeline
 
 __all__ = [
     # patchcore

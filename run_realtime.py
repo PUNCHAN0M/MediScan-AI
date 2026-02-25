@@ -29,31 +29,31 @@ ROOT = Path(__file__).parent
 
 MODEL_REGISTRY = {
     "mobile_sife_cuda": {
-        "script": "mobile_sife_cuda/predict_camera.py",
+        "script": "Core_mobile_sife_cuda/predict_camera.py",
         "desc": "MobileNet + SIFE PatchCore (CUDA Optimized)",
     },
     "mobilenet_sife": {
-        "script": "MobilenetSIFE/predict_camera.py",
+        "script": "Core_mobilenet_sife/predict_camera.py",
         "desc": "MobileNet + SIFE PatchCore",
     },
     "mobilenet": {
-        "script": "MobilenetPatchCore/predict_camera.py",
+        "script": "Core_mobilenet/predict_camera.py",
         "desc": "MobileNet PatchCore",
     },
     "resnet": {
-        "script": "ResnetPatchCore/predict_camera.py",
+        "script": "Core_ResnetPatchCore/predict_camera.py",
         "desc": "ResNet50 PatchCore (Color-Aware)",
     },
     "dinov2": {
-        "script": "DINOv2PatchCore/predict_camera_dinov2.py",
+        "script": "Core_DINOv2PatchCore/predict_camera_dinov2.py",
         "desc": "DINOv2 PatchCore",
     },
     "cnn_multiscale": {
-        "script": "CNNMultiScale/predict_camera.py",
+        "script": "Core_CNNMultiScale/predict_camera.py",
         "desc": "CNN Multi-Scale PatchCore (Tiny Defect)",
     },
     "wideresnet": {
-        "script": "WideResnetAnomalyCore/predict_camera.py",
+        "script": "Core_WideResnetAnomalyCore/predict_camera.py",
         "desc": "WideResNet50 PatchCore",
     },
 }

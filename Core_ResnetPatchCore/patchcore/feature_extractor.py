@@ -56,6 +56,12 @@ class ResNet50FeatureExtractor:
         Append per-patch HSV mean/std (+6 dims).
     color_weight : float
         Scale factor for color dims (1.0 = same scale as CNN features).
+    backbone_path : str or None
+        Path to a custom ``.pth`` backbone weights file.  When provided the
+        ImageNet pretrained weights are NOT loaded; instead the state-dict
+        (or a checkpoint containing ``"state_dict"`` / ``"model"`` key) is
+        loaded from this file.  Useful for domain-finetuned backbones such as
+        ``resnet_backbone.pth``.
     """
 
     # backbone layers to hook
@@ -70,6 +76,7 @@ class ResNet50FeatureExtractor:
         use_color_features: bool = False,
         use_hsv: bool = False,
         color_weight: float = 1.0,
+        backbone_path: Optional[str] = None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.img_size = img_size
@@ -79,7 +86,23 @@ class ResNet50FeatureExtractor:
         self.color_weight = color_weight
 
         # ── backbone ──
-        self.backbone = models.resnet50(weights="IMAGENET1K_V1")
+        if backbone_path:
+            print(f"[FeatureExtractor] Loading custom backbone from: {backbone_path}")
+            self.backbone = models.resnet50(weights=None)
+            state = torch.load(backbone_path, map_location="cpu")
+            # support raw state_dict or checkpoint dicts
+            if isinstance(state, dict):
+                if "state_dict" in state:
+                    state = state["state_dict"]
+                elif "model" in state:
+                    state = state["model"]
+            missing, unexpected = self.backbone.load_state_dict(state, strict=False)
+            if missing:
+                print(f"[FeatureExtractor] Missing keys ({len(missing)}): {missing[:5]} ...")
+            if unexpected:
+                print(f"[FeatureExtractor] Unexpected keys ({len(unexpected)}): {unexpected[:5]} ...")
+        else:
+            self.backbone = models.resnet50(weights="IMAGENET1K_V1")
         self.backbone = self.backbone.to(self.device).eval()
         for p in self.backbone.parameters():
             p.requires_grad = False
@@ -107,8 +130,9 @@ class ResNet50FeatureExtractor:
             T.ToTensor(),
         ])
 
+        backbone_label = backbone_path if backbone_path else "ImageNet pretrained"
         print(
-            f"[FeatureExtractor] ResNet50 | grid={grid_size} | "
+            f"[FeatureExtractor] ResNet50 | backbone={backbone_label} | grid={grid_size} | "
             f"cnn={self.cnn_dim} color={self.color_dim} total={self.feature_dim}"
         )
 

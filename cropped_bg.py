@@ -6,7 +6,7 @@ from datetime import datetime
 # Config
 # =========================
 SAVE_DIR = "data_yolo"
-CAM_INDEX = 0
+CAM_INDEX = 1
 
 os.makedirs(SAVE_DIR, exist_ok=True)
 

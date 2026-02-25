@@ -40,11 +40,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor
-from ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
-from ResnetPatchCore.patchcore.memory_bank import MemoryBank
-from ResnetPatchCore.patchcore.scorer import PatchCoreScorer
-from ResnetPatchCore.pipeline.visualizer import draw_pill_results, draw_summary
+from Core_ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
+from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
+from Core_ResnetPatchCore.pipeline.visualizer import draw_pill_results, draw_summary
 
 
 # ─────────────────────────────────────────────────────────

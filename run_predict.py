@@ -270,7 +270,7 @@ def _build_config(model_name: str, InspectorConfig):
     # Find ANY .pth in model_dir and read its meta to ensure feature
     # extraction matches what was used during training.
     saved_meta = {}
-    pth_files = list(model_dir.rglob("*.pth"))
+    pth_files = sorted(model_dir.rglob("*.pth"))  # sorted → deterministic across runs
     if pth_files:
         try:
             data = _torch.load(str(pth_files[0]), map_location="cpu", weights_only=False)
@@ -309,7 +309,9 @@ def _build_config(model_name: str, InspectorConfig):
         use_edge_enhancement=g("USE_EDGE_ENHANCEMENT", False),
         edge_weight=g("EDGE_WEIGHT", 1.5),
         finetuned_backbone_path=g("FINETUNED_BACKBONE_PATH", None),
-        score_method=g("SCORE_METHOD", "top1_mean"),
+        # Prefer score_method saved in model meta (matches calibration exactly)
+        # fall back to config file, then to the universal default
+        score_method=saved_meta.get("score_method") or g("SCORE_METHOD", "top10_mean"),
         threshold_multiplier=g("THRESHOLD_MULTIPLIER", 1.5),
     )
 

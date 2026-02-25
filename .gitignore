@@ -60,6 +60,7 @@ tmp/
 
 data/*
 data_yolo/
+data_backup/*
 model/*
 
 augmentation_result_1
@@ -73,3 +74,8 @@ result_predict_test
 result_resnet
 augmentation_result_1.zip
 result.zip
+data_train_backbone
+data_scrap
+data_scrap_backup
+data_scrap_resize
+data_train_backbone_backup

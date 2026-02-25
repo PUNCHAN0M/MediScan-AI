@@ -59,8 +59,8 @@ import json
 import numpy as np
 from datetime import datetime
 
-from ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
-from ResnetPatchCore.pipeline.visualizer import (
+from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
+from Core_ResnetPatchCore.pipeline.visualizer import (
     draw_summary, put_text_top_left, put_text_top_right,
     COLOR_ANOMALY, COLOR_BLACK,
 )
@@ -139,6 +139,9 @@ def draw_overlay(
 # ─────────────────── camera loop ───────────────────
 def run_camera(inspector: PillInspector) -> None:
     cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_ZOOM, 1.5)
     if not cap.isOpened():
         print(f"Cannot open camera {CAMERA_INDEX}")
         return

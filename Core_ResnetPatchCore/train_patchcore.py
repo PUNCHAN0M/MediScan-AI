@@ -27,6 +27,7 @@ Usage
     python run_train.py --model=resnet
     python ResnetPatchCore/train_patchcore.py
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -35,8 +36,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import torch
 from datetime import datetime
 
-from ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
-from ResnetPatchCore.pipeline.train import TrainPipeline
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.pipeline.train import TrainPipeline
 
 from config.base import DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS
 from config.resnet import (
@@ -49,6 +50,7 @@ from config.resnet import (
     USE_COLOR_FEATURES,
     USE_HSV,
     COLOR_WEIGHT,
+    SCORE_METHOD,
 )
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -85,14 +87,28 @@ def _resolve_parents(data_root: Path) -> list[Path]:
 
 # ─────────────────── main ───────────────────
 def main():
+    parser = argparse.ArgumentParser(description="ResNet50 PatchCore Training")
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to a custom backbone .pth file (e.g. resnet_backbone.pth). "
+             "Omit to use ImageNet pretrained weights.",
+    )
+    args, _ = parser.parse_known_args()
+
+    backbone_label = args.backbone if args.backbone else "resnet50 (ImageNet pretrained)"
+
     print("=" * 70)
     print("      ResNet50 PatchCore Training")
     print("=" * 70)
     print(f"  Device        : {DEVICE}")
-    print(f"  Backbone      : resnet50  (layer2 + layer3 → 1536-dim)")
+    print(f"  Backbone      : {backbone_label}")
     print(f"  Image size    : {IMG_SIZE} × {IMG_SIZE}")
     print(f"  Grid size     : {GRID_SIZE} × {GRID_SIZE}")
     print(f"  Color features: {USE_COLOR_FEATURES}  HSV: {USE_HSV}  weight: {COLOR_WEIGHT}")
+    print(f"  Score method  : {SCORE_METHOD}")
     print(f"  Coreset ratio : {CORESET_RATIO}")
     print(f"  k-nearest     : {K_NEAREST}")
     print(f"  Fallback thr  : {FALLBACK_THRESHOLD}")
@@ -108,6 +124,7 @@ def main():
         use_color_features=USE_COLOR_FEATURES,
         use_hsv=USE_HSV,
         color_weight=COLOR_WEIGHT,
+        backbone_path=args.backbone,
     )
 
     pipeline = TrainPipeline(
@@ -116,6 +133,7 @@ def main():
         seed=SEED,
         fallback_threshold=FALLBACK_THRESHOLD,
         k_nearest=K_NEAREST,
+        score_method=SCORE_METHOD,    # threshold calibrated with the same method as inference
     )
 
     MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
