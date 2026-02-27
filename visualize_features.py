@@ -54,8 +54,8 @@ def main():
     # 🧠 BACKBONES
     # =============================
     BACKBONE_CONFIG = {
-        "ImageNet": 'model/backbone/resnet_backbone_20260226_234833.pth',
-        "MObileNetV3-fintune": "model/backbone/mobilenet_backbone_20260226_210504.pth",
+        "FineTuned_before": 'model/backbone/resnet_backbone_20260226_234833.pth',
+        "FineTuned_after": "model/backbone/resnet_backbone_20260227_152310.pth",
     }
 
     extractors = {}

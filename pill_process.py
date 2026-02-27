@@ -20,10 +20,10 @@ ROOT_BACKBONE_OUTPUT_DIR = "data_train_backbone"
 ROOT_TRAIN_OUTPUT_DIR = "data_train_defection"
 
 AUGMENT_COUNT_PER_IMAGE = 5
-DEFECTION_MIN_IMAGES = 500
-DEFECTION_MAX_IMAGES = 1000
+DEFECTION_MIN_IMAGES = 800
+DEFECTION_MAX_IMAGES = 800
 BACKBONE_MIN_IMAGES = 500
-BACKBONE_MAX_IMAGES = 1000
+BACKBONE_MAX_IMAGES = 500
 TRAIN_TEST_RATIO = 0.8  # 80% Train, 20% Test
 
 # =============================================================================

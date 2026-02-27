@@ -24,7 +24,7 @@ from config.base import DEFAULT_FALLBACK_THRESHOLD
 # =============================================================================
 #  BACKBONE
 # =============================================================================
-BACKBONE = "model/backbone/resnet_backbone_20260226_234833.pth"  #"None"
+BACKBONE = "model/backbone/resnet_last.pth"  #"None"
 LAYERS = ["layer1", "layer2", "layer3"]          # 512 + 1024 = 1536 dim/patch
 
 

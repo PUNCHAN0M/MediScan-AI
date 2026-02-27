@@ -29,7 +29,7 @@ class PillDetection:
     """Single detected pill."""
     bbox: Tuple[int, int, int, int]       # x1, y1, x2, y2
     mask: Optional[np.ndarray] = None     # binary mask (H, W) uint8, same as frame
-    conf: float = 0.0
+    conf: float = 0.5
     class_id: int = 0
 
 
@@ -92,6 +92,7 @@ class YOLOSegmentor:
     # ─────────────────────────────────────────────────────
     #  Detection
     # ─────────────────────────────────────────────────────
+    
     def detect(self, frame: np.ndarray) -> List[PillDetection]:
         """
         Run YOLO inference on a single frame.

@@ -38,12 +38,8 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
 # Classes to train (empty list = train all available classes)
 SELECTED_CLASSES = [
-    "black_sphere",
-    "brown_cap",
-    "gray_circle",
-    "red_cap",
-    "white_oval",
-    "yellow_circle",
+
+
 ]
 
 
@@ -58,13 +54,46 @@ WINDOW_NAME = "Pill Inspector"
 
 # Classes to compare during prediction
 COMPARE_CLASSES = [
-    # "black_sphere",
-    # "brown_cap",
-    # "gray_circle",
-    # "red_cap",
+    # "Androxsil",
+    # "ANTA1mg",
+    # "Baclofen",
+    # "Bestatin20",
+    # "CANDY",
+    # "Clozapine25mg",
+    # "DiclofenacSodium50mg",
+    # "DILIZEM",
+    # "Exelon45mg",
+    # "Fahtaliejone",
+    # "Flunarizine5mg",
+    # "Flupentixol05mg",
+    # "Glipizide",
+    # "green_circle",
+    # "ISOTRATE",
+    # "JANUMET_back",
+    # "JANUMET_front",
+    # "Lanzaar50",
+    # "line",
+    # "LOSARTAN_POTASSIUM50mg",
+    # "NOXA20",
+    # "panadol",
+    # "paracap",
+    # "pink_circle",
+    # "Pregabalin25mg",
+    # "Quetiepine25mg",
+    # "sara",
+    # "SITAGTIN-100",
+    # "tiffy_back",
+    # "tiffy_front",
+    # "TOP",
+    # "Trazodel",
+    # "TURMERICCAPSULE",
+    # "ULTRACET",
+    # "vitaminc",
     # "white_oval",
+    # "white_smaill_circle",
+    "XELJANZ5mg",
     # "yellow_circle",
-
+    # "ZYMRON15",
 ]
 
 
