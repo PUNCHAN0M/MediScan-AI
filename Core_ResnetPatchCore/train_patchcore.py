@@ -41,6 +41,7 @@ from Core_ResnetPatchCore.pipeline.train import TrainPipeline
 
 from config.base import DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS
 from config.resnet import (
+    BACKBONE,
     IMG_SIZE,
     GRID_SIZE,
     CORESET_RATIO,
@@ -93,12 +94,17 @@ def main():
         type=str,
         default=None,
         metavar="PATH",
-        help="Path to a custom backbone .pth file (e.g. resnet_backbone.pth). "
-             "Omit to use ImageNet pretrained weights.",
+        help="Path to a custom backbone .pth file. "
+             "Defaults to BACKBONE in config/resnet.py.",
     )
     args, _ = parser.parse_known_args()
 
-    backbone_label = args.backbone if args.backbone else "resnet50 (ImageNet pretrained)"
+    # CLI --backbone overrides config; config overrides ImageNet default
+    backbone_path = args.backbone or BACKBONE
+    # If config says 'resnet50' (no file), treat as None → ImageNet pretrained
+    if backbone_path and not Path(backbone_path).suffix == ".pth":
+        backbone_path = None
+    backbone_label = backbone_path if backbone_path else "resnet50 (ImageNet pretrained)"
 
     print("=" * 70)
     print("      ResNet50 PatchCore Training")
@@ -124,7 +130,7 @@ def main():
         use_color_features=USE_COLOR_FEATURES,
         use_hsv=USE_HSV,
         color_weight=COLOR_WEIGHT,
-        backbone_path=args.backbone,
+        backbone_path=backbone_path,
     )
 
     pipeline = TrainPipeline(

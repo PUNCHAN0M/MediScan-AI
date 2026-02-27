@@ -43,37 +43,37 @@ FCDD_SCRIPT = "FCDD/fcdd_inference.py"
 # PatchCore-based models share the same inspector pattern
 PATCHCORE_MODELS = {
     "mobile_sife_cuda": {
-        "module":     "mobile_sife_cuda",
+        "module":     "Core_mobile_sife_cuda",
         "config_mod": "config.sife",
         "desc":       "MobileNet + SIFE PatchCore (CUDA Optimized)",
     },
     "mobilenet_sife": {
-        "module":     "MobilenetSIFE",
+        "module":     "Core_mobilenet_sife",
         "config_mod": "config.mobilenet",
         "desc":       "MobileNet + SIFE PatchCore",
     },
     "mobilenet": {
-        "module":     "MobilenetPatchCore",
+        "module":     "Core_mobilenet",
         "config_mod": "config.mobilenet",
         "desc":       "MobileNet PatchCore",
     },
     "resnet": {
-        "module":     "ResnetPatchCore",
+        "module":     "Core_ResnetPatchCore",
         "config_mod": "config.resnet",
         "desc":       "ResNet50 PatchCore (Color-Aware)",
     },
     "dinov2": {
-        "module":     "DINOv2PatchCore",
+        "module":     "Core_DINOv2PatchCore",
         "config_mod": "config.dinov2",
         "desc":       "DINOv2 PatchCore",
     },
     "cnn_multiscale": {
-        "module":     "CNNMultiScale",
+        "module":     "Core_CNNMultiScale",
         "config_mod": "config.cnnmultiscale",
         "desc":       "CNN Multi-Scale PatchCore (Tiny Defect)",
     },
     "wideresnet": {
-        "module":     "WideResnetAnomalyCore",
+        "module":     "Core_WideResnetAnomaly",
         "config_mod": "config.wideresnet",
         "desc":       "WideResNet50 PatchCore",
     },
@@ -309,6 +309,7 @@ def _build_config(model_name: str, InspectorConfig):
         use_edge_enhancement=g("USE_EDGE_ENHANCEMENT", False),
         edge_weight=g("EDGE_WEIGHT", 1.5),
         finetuned_backbone_path=g("FINETUNED_BACKBONE_PATH", None),
+        backbone_path=g("BACKBONE", None) if str(g("BACKBONE", "")).endswith(".pth") else None,
         # Prefer score_method saved in model meta (matches calibration exactly)
         # fall back to config file, then to the universal default
         score_method=saved_meta.get("score_method") or g("SCORE_METHOD", "top10_mean"),
@@ -404,4 +405,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    #python run_predict.py --model=mobile_sife_cuda --input=data_yolo/test --output=result_sife
+    #python run_predict.py --model=resnet --input=data_yolo/test

@@ -13,8 +13,8 @@ from config.base import SELECTED_CLASSES, SEED
 # =============================================================================
 
 ROOT_INPUT_DIR = "data"
-INPUT_MAINCLASS_DIR: Optional[str] = ['black_sphere']#None 
-INPUT_SUBCLASS_DIR: Optional[str] = ['black_sphere','brown_cap']#None
+INPUT_MAINCLASS_DIR: Optional[str] = None  #['black_sphere']
+INPUT_SUBCLASS_DIR: Optional[str] = None  #['black_sphere','brown_cap']
 
 ROOT_BACKBONE_OUTPUT_DIR = "data_train_backbone"
 ROOT_TRAIN_OUTPUT_DIR = "data_train_defection"
@@ -22,8 +22,8 @@ ROOT_TRAIN_OUTPUT_DIR = "data_train_defection"
 AUGMENT_COUNT_PER_IMAGE = 5
 DEFECTION_MIN_IMAGES = 500
 DEFECTION_MAX_IMAGES = 1000
-BACKBONE_MIN_IMAGES = 100
-BACKBONE_MAX_IMAGES = 100
+BACKBONE_MIN_IMAGES = 500
+BACKBONE_MAX_IMAGES = 1000
 TRAIN_TEST_RATIO = 0.8  # 80% Train, 20% Test
 
 # =============================================================================

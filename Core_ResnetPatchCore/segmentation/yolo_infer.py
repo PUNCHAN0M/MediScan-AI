@@ -172,11 +172,16 @@ class YOLOSegmentor:
         x2 = min(fw, x2 + pad)
         y2 = min(fh, y2 + pad)
 
-        # apply mask
+        # apply mask with pill_collect.py style preprocessing + alpha blend
         if det.mask is not None:
-            bg = np.full_like(frame, bg_value)
-            mask3 = np.stack([det.mask] * 3, axis=-1)
-            masked = np.where(mask3, frame, bg)
+            m_u8 = (det.mask * 255).astype(np.uint8) if det.mask.max() <= 1 else det.mask.astype(np.uint8)
+            _morph_k = np.ones((5, 5), np.uint8)
+            m_u8 = cv2.morphologyEx(m_u8, cv2.MORPH_CLOSE, _morph_k)
+            m_u8 = cv2.morphologyEx(m_u8, cv2.MORPH_OPEN, _morph_k)
+            m_u8 = cv2.GaussianBlur(m_u8, (7, 7), 0)
+            _, m_u8 = cv2.threshold(m_u8, 128, 255, cv2.THRESH_BINARY)
+            alpha = m_u8.astype(np.float32) / 255.0
+            masked = (frame.astype(np.float32) * alpha[:, :, None]).astype(np.uint8)
         else:
             masked = frame
 
@@ -196,7 +201,7 @@ class YOLOSegmentor:
         if side != target_size:
             square = cv2.resize(
                 square, (target_size, target_size),
-                interpolation=cv2.INTER_LINEAR,
+                interpolation=cv2.INTER_LANCZOS4,
             )
 
         return square

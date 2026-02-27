@@ -3,6 +3,9 @@
 """
 Pill Dataset Augmentation System (Minimal Version)
 สร้างเฉพาะภาพ Combined Augmented และ Original เท่านั้น
+
+Input: data_scrap_resize/{main_class}*/
+Output: data_backbone_augment/{main_class}*/
 """
 
 import cv2
@@ -19,11 +22,11 @@ from typing import Tuple, Optional
 # =============================================================================
 CONFIG = {
     # 📁 Input/Output Paths
-    "INPUT_DIR": "data_yolo/test_cropped_pill/",
-    "OUTPUT_DIR": "data_yolo/augmented_dataset/",
+    "INPUT_DIR": "data_scrap_resize/",  # เปลี่ยนเป็น data_scrap_resize
+    "OUTPUT_DIR": "data_backbone_augment/",  # เปลี่ยนเป็น data_backbone_augment
     
     # 🎯 Augmentation Settings
-    "AUGMENT_COUNT": 2,
+    "AUGMENT_COUNT": 500,
     
     # ☀️ Brightness Adjustment
     "USE_BRIGHTNESS": True,
@@ -49,6 +52,9 @@ CONFIG = {
     
     # 🗑️ Output Mode: True = เก็บแค่ combined + original, False = เก็บทุกแบบแยกโฟลเดอร์
     "COMBINED_ONLY": True,
+    
+    # 📁 Pattern: รูปแบบของ main_class (ใช้ * แทน wildcard)
+    "MAIN_CLASS_PATTERN": "*",  # จะ match ทุกโฟลเดอร์ที่อยู่ใน INPUT_DIR
 }
 
 # =============================================================================
@@ -71,11 +77,11 @@ class PillAugmenter:
         self.input_dir = Path(config["INPUT_DIR"])
         self.output_dir = Path(config["OUTPUT_DIR"])
         
-        # ✅ สร้างแค่โฟลเดอร์หลักโฟลเดอร์เดียว (Minimal)
+        # ✅ สร้างโฟลเดอร์ output หลัก
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.info(f"📁 Input: {self.input_dir}")
-        logger.info(f"📁 Output: {self.output_dir} (Minimal Mode: {config.get('COMBINED_ONLY', True)})")
+        logger.info(f"📁 Input: {self.input_dir} (พร้อม main_class ย่อย)")
+        logger.info(f"📁 Output: {self.output_dir} (จะสร้างโฟลเดอร์ตาม main_class)")
         logger.info(f"🔢 Augment Count per Image: {config['AUGMENT_COUNT']}")
         
     def _adjust_brightness(self, image: np.ndarray) -> np.ndarray:
@@ -193,9 +199,13 @@ class PillAugmenter:
         
         return {"combined": combined_img}
     
-    def save_image(self, image: np.ndarray, filename: str) -> str:
-        """บันทึกภาพลงโฟลเดอร์ output โดยตรง"""
-        save_path = self.output_dir / filename
+    def save_image(self, image: np.ndarray, main_class: str, filename: str) -> str:
+        """บันทึกภาพลงโฟลเดอร์ output ตาม main_class"""
+        # สร้างโฟลเดอร์ตาม main_class
+        class_output_dir = self.output_dir / main_class
+        class_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        save_path = class_output_dir / filename
         fmt = self.cfg["SAVE_FORMAT"].lower()
         if fmt in ["jpg", "jpeg"]:
             cv2.imwrite(str(save_path), image, [cv2.IMWRITE_JPEG_QUALITY, self.cfg["JPEG_QUALITY"]])
@@ -203,26 +213,29 @@ class PillAugmenter:
             cv2.imwrite(str(save_path), image)
         return str(save_path)
     
-    def process_dataset(self):
-        """ประมวลผลทั้งหมดในโฟลเดอร์ Input"""
+    def process_main_class(self, main_class_dir: Path):
+        """ประมวลผลภาพทั้งหมดใน main_class ที่กำหนด"""
+        main_class = main_class_dir.name
+        logger.info(f"📂 Processing main class: {main_class}")
+        
         extensions = ['*.png', '*.jpg', '*.jpeg', '*.bmp', '*.webp']
         image_files = []
         for ext in extensions:
-            image_files.extend(self.input_dir.glob(ext))
-            
+            image_files.extend(main_class_dir.glob(ext))
+        
         if not image_files:
-            logger.error(f"❌ No images found in {self.input_dir}")
-            return
-            
-        logger.info(f"🚀 Found {len(image_files)} images")
-        total_saved = 0
+            logger.warning(f"⚠️ No images found in {main_class_dir}")
+            return 0, 0
+        
+        logger.info(f"   Found {len(image_files)} images in {main_class}")
+        class_saved = 0
         
         for idx, img_path in enumerate(image_files, 1):
-            logger.info(f"[{idx}/{len(image_files)}] Processing: {img_path.name}")
+            logger.info(f"   [{idx}/{len(image_files)}] Processing: {img_path.name}")
             
             img = cv2.imread(str(img_path))
             if img is None:
-                logger.warning(f"⚠️ Could not read: {img_path}")
+                logger.warning(f"   ⚠️ Could not read: {img_path}")
                 continue
             
             img_name = img_path.stem
@@ -230,8 +243,8 @@ class PillAugmenter:
             # ✅ บันทึกภาพต้นฉบับ (หลังจากทำ padding สีดำให้เป็นสี่เหลี่ยม)
             original_squared = self._add_black_padding_to_square(img)
             orig_filename = f"{img_name}_original.{self.cfg['SAVE_FORMAT']}"
-            self.save_image(original_squared, orig_filename)
-            total_saved += 1
+            self.save_image(original_squared, main_class, orig_filename)
+            class_saved += 1
             
             # ✅ สร้างและบันทึก Augmented Images
             for aug_idx in range(self.cfg["AUGMENT_COUNT"]):
@@ -240,23 +253,46 @@ class PillAugmenter:
                 
                 # บันทึก augmented image
                 filename = f"{img_name}_aug{aug_idx:02d}_combined_{timestamp}.{self.cfg['SAVE_FORMAT']}"
-                self.save_image(aug_results["combined"], filename)
-                total_saved += 1
-            
+                self.save_image(aug_results["combined"], main_class, filename)
+                class_saved += 1
+        
+        return len(image_files), class_saved
+    
+    def process_dataset(self):
+        """ประมวลผลทั้งหมดในโฟลเดอร์ Input โดยวนทุก main_class"""
+        # หาโฟลเดอร์ main_class ทั้งหมดใน input_dir
+        pattern = self.cfg.get("MAIN_CLASS_PATTERN", "*")
+        main_class_dirs = [d for d in self.input_dir.glob(f"{pattern}") if d.is_dir()]
+        
+        if not main_class_dirs:
+            logger.error(f"❌ No main_class directories found in {self.input_dir}")
+            logger.info(f"   Looking for pattern: {pattern}")
+            return
+        
+        logger.info(f"🚀 Found {len(main_class_dirs)} main class directories")
+        
+        total_original = 0
+        total_saved = 0
+        
+        for main_class_dir in sorted(main_class_dirs):
+            orig_count, saved_count = self.process_main_class(main_class_dir)
+            total_original += orig_count
+            total_saved += saved_count
+        
         logger.info(f"✅ Augmentation Complete!")
         logger.info(f"💾 Total images saved: {total_saved}")
-        self._print_summary(len(image_files), total_saved)
+        self._print_summary(total_original, total_saved)
         
     def _print_summary(self, original_count: int, augmented_count: int):
         print("\n" + "="*60)
-        print("📊 AUGMENTATION SUMMARY (Minimal)")
+        print("📊 AUGMENTATION SUMMARY")
         print("="*60)
         print(f"Original Images:     {original_count}")
         print(f"Augmented Images:    {augmented_count - original_count}")
         print(f"Total Output:        {augmented_count}")
         print("-"*60)
         print(f"📁 Output Directory: {self.output_dir}")
-        print("🗂️  Files saved directly (no subfolders)")
+        print("🗂️  Files saved with main_class subfolders")
         print("="*60 + "\n")
 
 
@@ -266,6 +302,9 @@ class PillAugmenter:
 
 def main():
     logger.info("🔷 Pill Augmentation System Starting...")
+    logger.info(f"📂 Input pattern: {CONFIG['INPUT_DIR']}{{main_class}}*/")
+    logger.info(f"📂 Output: {CONFIG['OUTPUT_DIR']}{{main_class}}*/")
+    
     try:
         augmenter = PillAugmenter(CONFIG)
         augmenter.process_dataset()

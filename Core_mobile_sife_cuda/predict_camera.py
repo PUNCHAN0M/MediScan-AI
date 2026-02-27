@@ -291,6 +291,29 @@ def save_crops(crops: dict, output_dir: Path) -> int:
     return len(crops)
 
 
+def build_crop_grid(crops: dict, cell_size: int = 128, max_cols: int = 5) -> "np.ndarray | None":
+    """Build a visual grid of crop images (what enters PatchCore) for preview."""
+    if not crops:
+        return None
+    items = list(crops.items())
+    n = len(items)
+    cols = min(n, max_cols)
+    rows = (n + cols - 1) // cols
+    label_h = 20
+    grid = np.zeros((rows * (cell_size + label_h), cols * cell_size, 3), dtype=np.uint8)
+    for idx, (tid, img) in enumerate(items):
+        row = idx // cols
+        col = idx % cols
+        y = row * (cell_size + label_h)
+        x = col * cell_size
+        cell = img[:, :, :3] if img.ndim == 3 and img.shape[2] == 4 else img
+        cell = cv2.resize(cell, (cell_size, cell_size), interpolation=cv2.INTER_LANCZOS4)
+        grid[y + label_h:y + label_h + cell_size, x:x + cell_size] = cell
+        cv2.putText(grid, f"ID:{tid}", (x + 4, y + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    return grid
+
+
 def print_report(anomaly_counts: dict) -> None:
     """Print anomaly report table."""
     if not anomaly_counts:
@@ -413,6 +436,7 @@ def run_camera(inspector: PillInspectorSIFE) -> None:
     cached_results: List[Dict[str, Any]] = []
     cached_anomaly_count: int = 0
     cached_proc_fps: float = 0.0
+    cached_crop_grid: Optional[np.ndarray] = None
 
     try:
         while not stop_event.is_set():
@@ -433,6 +457,9 @@ def run_camera(inspector: PillInspectorSIFE) -> None:
                 cached_anomaly_count = sum(1 for c in anomaly_counts.values() if c > 0)
                 cached_proc_fps = proc_fps
 
+                # Update crop preview grid whenever new inference finishes
+                cached_crop_grid = build_crop_grid(inspector.last_crops)
+
                 # Print scores to console only when new results arrive
                 print_frame_scores(results, thresholds)
 
@@ -450,6 +477,7 @@ def run_camera(inspector: PillInspectorSIFE) -> None:
                     proc_thread.frame_count = 0
                     cached_results = []
                     cached_anomaly_count = 0
+                    cached_crop_grid = None
 
             # ── 3. ALWAYS draw live frame with overlaid results ──
             display = draw_live_overlay(
@@ -462,6 +490,10 @@ def run_camera(inspector: PillInspectorSIFE) -> None:
                 proc_fps=cached_proc_fps,
             )
             cv2.imshow(WINDOW_NAME + " [SIFE-CUDA MT]", display)
+
+            # ── 3b. Show crop preview (pills entering PatchCore) ──
+            if cached_crop_grid is not None:
+                cv2.imshow("Crop Preview", cached_crop_grid)
 
             # ── 4. Handle keyboard (must be main thread for OpenCV) ──
             key = cv2.waitKey(1) & 0xFF
@@ -476,6 +508,7 @@ def run_camera(inspector: PillInspectorSIFE) -> None:
                 proc_thread.frame_count = 0
                 cached_results = []
                 cached_anomaly_count = 0
+                cached_crop_grid = None
                 print("[Reset] Cleared votes and tracking")
             elif key == 13:  # Enter
                 result = inspector.summarize()
@@ -488,6 +521,7 @@ def run_camera(inspector: PillInspectorSIFE) -> None:
                 proc_thread.frame_count = 0
                 cached_results = []
                 cached_anomaly_count = 0
+                cached_crop_grid = None
 
     finally:
         stop_event.set()

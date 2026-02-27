@@ -26,7 +26,7 @@ CONFIG = {
     "INPUT_DIR": None,  # Example: "data_yolo/dataset/" หรือ None
     
     # Output Directory สำหรับบันทึกภาพที่ Crop แล้ว
-    "OUTPUT_DIR": "data/white_oval/white_oval",
+    "OUTPUT_DIR": "data/red_cap/red_cap",
     
     # Confidence Threshold (0.0 - 1.0)
     "CONFIDENCE": 0.25,

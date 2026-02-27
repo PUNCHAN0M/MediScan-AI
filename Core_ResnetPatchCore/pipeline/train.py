@@ -145,7 +145,7 @@ class TrainPipeline:
         # ── metadata ──
         meta: Dict = {
             "threshold": threshold,
-            "backbone": "resnet50",
+            "backbone": getattr(self.extractor, "backbone_path", None) or "resnet50",
             "img_size": self.extractor.img_size,
             "grid_size": self.extractor.grid_size,
             "feature_dim": self.extractor.feature_dim,

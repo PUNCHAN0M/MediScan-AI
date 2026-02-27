@@ -132,7 +132,7 @@ def make_square_crop(crop: np.ndarray, target_size: int = 512) -> np.ndarray:
     if max_side != target_size:
         square = cv2.resize(
             square, (target_size, target_size),
-            interpolation=cv2.INTER_LINEAR,
+            interpolation=cv2.INTER_LANCZOS4,
         )
 
     return square

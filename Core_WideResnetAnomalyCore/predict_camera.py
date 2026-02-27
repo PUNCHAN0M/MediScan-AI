@@ -87,6 +87,29 @@ def save_crops(crops: dict, output_dir: Path) -> int:
     return len(crops)
 
 
+def build_crop_grid(crops: dict, cell_size: int = 128, max_cols: int = 5) -> "np.ndarray | None":
+    """Build a visual grid of crop images (what enters PatchCore) for preview."""
+    if not crops:
+        return None
+    items = list(crops.items())
+    n = len(items)
+    cols = min(n, max_cols)
+    rows = (n + cols - 1) // cols
+    label_h = 20
+    grid = np.zeros((rows * (cell_size + label_h), cols * cell_size, 3), dtype=np.uint8)
+    for idx, (tid, img) in enumerate(items):
+        row = idx // cols
+        col = idx % cols
+        y = row * (cell_size + label_h)
+        x = col * cell_size
+        cell = img[:, :, :3] if img.ndim == 3 and img.shape[2] == 4 else img
+        cell = cv2.resize(cell, (cell_size, cell_size), interpolation=cv2.INTER_LANCZOS4)
+        grid[y + label_h:y + label_h + cell_size, x:x + cell_size] = cell
+        cv2.putText(grid, f"ID:{tid}", (x + 4, y + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    return grid
+
+
 def print_report(anomaly_counts: dict) -> None:
     """Print anomaly report."""
     if not anomaly_counts:
@@ -167,6 +190,11 @@ def run_camera(inspector: PillInspectorWideResNet) -> None:
             # Draw overlay
             display = draw_overlay(preview, frame_count, FRAMES_BEFORE_SUMMARY, anomaly_count)
             cv2.imshow(WINDOW_NAME + " [WideResNet]", display)
+
+            # Show crop preview (pills before PatchCore)
+            crop_grid = build_crop_grid(inspector.last_crops)
+            if crop_grid is not None:
+                cv2.imshow("Crop Preview", crop_grid)
 
             # Auto-summarize
             if frame_count >= FRAMES_BEFORE_SUMMARY:

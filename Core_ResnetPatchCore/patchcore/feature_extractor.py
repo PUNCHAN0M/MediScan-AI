@@ -65,9 +65,9 @@ class ResNet50FeatureExtractor:
     """
 
     # backbone layers to hook
-    LAYERS = ("layer2", "layer3")
-    LAYER_CHANNELS = {"layer2": 512, "layer3": 1024}
-
+    LAYERS = ("layer1", "layer2", "layer3")  # เดิม: ("layer2", "layer3")
+    LAYER_CHANNELS = {"layer1": 256, "layer2": 512, "layer3": 1024}  # ✅ เพิ่ม layer1: 256
+  
     def __init__(
         self,
         img_size: int = 256,
@@ -84,18 +84,26 @@ class ResNet50FeatureExtractor:
         self.use_color_features = use_color_features
         self.use_hsv = use_hsv
         self.color_weight = color_weight
+        self.backbone_path = backbone_path
 
         # ── backbone ──
         if backbone_path:
             print(f"[FeatureExtractor] Loading custom backbone from: {backbone_path}")
             self.backbone = models.resnet50(weights=None)
             state = torch.load(backbone_path, map_location="cpu")
+            
             # support raw state_dict or checkpoint dicts
             if isinstance(state, dict):
-                if "state_dict" in state:
-                    state = state["state_dict"]
-                elif "model" in state:
-                    state = state["model"]
+                for key in ("state_dict", "model", "full_state_dict", "features_state_dict"):
+                    if key in state:
+                        print(f"[FeatureExtractor] Using key '{key}' from checkpoint")
+                        state = state[key]
+                        break
+            
+            # ✅ FIX: Remove fc layer weights (we only use backbone features for PatchCore)
+            state = {k: v for k, v in state.items() if not k.startswith('fc.')}
+            print(f"[FeatureExtractor] Removed fc layer from checkpoint")
+            
             missing, unexpected = self.backbone.load_state_dict(state, strict=False)
             if missing:
                 print(f"[FeatureExtractor] Missing keys ({len(missing)}): {missing[:5]} ...")
@@ -103,6 +111,7 @@ class ResNet50FeatureExtractor:
                 print(f"[FeatureExtractor] Unexpected keys ({len(unexpected)}): {unexpected[:5]} ...")
         else:
             self.backbone = models.resnet50(weights="IMAGENET1K_V1")
+
         self.backbone = self.backbone.to(self.device).eval()
         for p in self.backbone.parameters():
             p.requires_grad = False
@@ -111,14 +120,14 @@ class ResNet50FeatureExtractor:
         self._register_hooks()
 
         # ── dimensions ──
-        self.cnn_dim = sum(self.LAYER_CHANNELS[l] for l in self.LAYERS)  # 1536
+        self.cnn_dim = sum(self.LAYER_CHANNELS[l] for l in self.LAYERS)  # ✅ 256+512+1024 = 1808
         self.color_dim = 0
         if use_color_features:
             self.color_dim += 6
         if use_hsv:
             self.color_dim += 6
-        self.feature_dim = self.cnn_dim + self.color_dim
-
+        self.feature_dim = self.cnn_dim + self.color_dim  # ✅ 1808 หรือ 1820 ถ้ามี color
+        
         # ── transforms ──
         self.transform = T.Compose([
             T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BICUBIC),

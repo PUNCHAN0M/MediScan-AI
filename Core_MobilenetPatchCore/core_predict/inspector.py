@@ -85,7 +85,7 @@ def make_square_crop(crop: np.ndarray, target_size: int = 224) -> np.ndarray:
     square[y_offset:y_offset + h, x_offset:x_offset + w] = crop
     
     if max_side != target_size:
-        square = cv2.resize(square, (target_size, target_size), interpolation=cv2.INTER_LINEAR)
+        square = cv2.resize(square, (target_size, target_size), interpolation=cv2.INTER_LANCZOS4)
     
     return square
 

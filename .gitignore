@@ -66,8 +66,7 @@ model/*
 augmentation_result_1
 result
 .results_yolo/
-result_1class_1img
-result_backup
+data_backup
 result_fcdd
 result_mobile_sife_cuda
 result_predict_test
@@ -79,3 +78,12 @@ data_scrap
 data_scrap_backup
 data_scrap_resize
 data_train_backbone_backup
+
+Core_ResnetPatchCore.zip
+data.zip
+
+data_scrap_resize
+data_scrap_resize_backup
+data_train_defection
+data_backbone_augment
+data_backbone_augment_backup

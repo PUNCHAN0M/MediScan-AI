@@ -79,6 +79,9 @@ class InspectorConfig:
     score_method: str = "top5_mean"   # "max" | "top1_mean" | "top5_mean | "top10_mean" (balanced)
     threshold_multiplier: float = 1  # small buffer above calibrated thr
 
+    # ── backbone ──
+    backbone_path: Optional[str] = None      # custom .pth backbone
+
     # ── crop ──
     crop_size: int = 256
     bg_value: int = 0
@@ -145,6 +148,7 @@ class PillInspector:
             use_color_features=cfg.use_color_features,
             use_hsv=cfg.use_hsv,
             color_weight=cfg.color_weight,
+            backbone_path=cfg.backbone_path,
         )
 
         # scorer

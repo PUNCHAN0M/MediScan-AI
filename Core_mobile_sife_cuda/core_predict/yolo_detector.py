@@ -916,20 +916,32 @@ class PillYOLODetector:
 
         cropped, infos = [], []
         pad = self.pad
+        _morph_k = np.ones((5, 5), np.uint8)
 
         for mask, box, conf in zip(masks, boxes, scores):
-            ys, xs = np.where(mask)
+            # pill_collect.py style mask preprocessing
+            m_u8 = mask.astype(np.uint8) * 255
+            m_u8 = cv2.morphologyEx(m_u8, cv2.MORPH_CLOSE, _morph_k)
+            m_u8 = cv2.morphologyEx(m_u8, cv2.MORPH_OPEN, _morph_k)
+            m_u8 = cv2.GaussianBlur(m_u8, (7, 7), 0)
+            _, m_u8 = cv2.threshold(m_u8, 128, 255, cv2.THRESH_BINARY)
+
+            ys, xs = np.where(m_u8)
             if len(xs) == 0:
                 continue
 
-            x1 = max(0, xs.min() - pad)
-            y1 = max(0, ys.min() - pad)
-            x2 = min(w, xs.max() + pad)
-            y2 = min(h, ys.max() + pad)
+            x1 = max(0, int(xs.min()) - pad)
+            y1 = max(0, int(ys.min()) - pad)
+            x2 = min(w, int(xs.max()) + pad)
+            y2 = min(h, int(ys.max()) + pad)
 
-            crop = frame[y1:y2, x1:x2].copy()
-            mask_region = mask[y1:y2, x1:x2]
-            crop[~mask_region] = 0
+            # Alpha blend on black background (smooth edges)
+            crop_img = frame[y1:y2, x1:x2].copy()
+            crop_mask = m_u8[y1:y2, x1:x2]
+            alpha = crop_mask.astype(np.float32) / 255.0
+            crop = np.zeros_like(crop_img)
+            for c in range(3):
+                crop[:, :, c] = (crop_img[:, :, c] * alpha).astype(np.uint8)
 
             cropped.append(crop)
             infos.append({

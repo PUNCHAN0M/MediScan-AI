@@ -15,7 +15,7 @@ Dataset format expected:
         └── image2.jpg
 
 Output:
-    model/{model_name}_backbone_{timestamp}.pth   ← โหลดไปใช้กับ PatchCoreSIFE ต่อ
+    model/backbone/{model_name}_backbone_{timestamp}.pth ← โหลดไปใช้กับ PatchCoreSIFE ต่อ
 
 Usage:
     python run_finetune_backbone.py --model=mobilenet
@@ -46,9 +46,9 @@ from PIL import Image
 #                              DEFAULTS
 # =============================================================================
 
-DEFAULT_DATA_DIR   = Path("augmentation_result_1")
-DEFAULT_OUTPUT_DIR = Path("model/")          # ✅ เปลี่ยนเป็นโฟลเดอร์แทนไฟล์
-DEFAULT_EPOCHS     = 10                      # ✅ ปรับค่า default ให้เหมาะสม
+DEFAULT_DATA_DIR   = Path("data_backbone_augment/")
+DEFAULT_OUTPUT_DIR = Path("model/backbone/")          # ✅ เปลี่ยนเป็นโฟลเดอร์แทนไฟล์
+DEFAULT_EPOCHS     = 20                      # ✅ ปรับค่า default ให้เหมาะสม
 DEFAULT_WARMUP     = 5
 DEFAULT_LR         = 1e-4
 DEFAULT_LR_HEAD    = 1e-3
@@ -57,6 +57,78 @@ DEFAULT_VAL_SPLIT  = 0.25
 DEFAULT_IMG_SIZE   = 256
 DEFAULT_WORKERS    = 4
 DEFAULT_UNFREEZE   = 3
+
+# ✅ Early Stopping defaults
+DEFAULT_PATIENCE   = 7                      # หยุดถ้า validation ไม่ดีขึ้น 7 epoch
+DEFAULT_MIN_DELTA  = 0.001                   # ขั้นต่ำที่ถือว่า "ดีขึ้น" (0.1%)
+
+
+# =============================================================================
+#                         CUSTOM DATASET FOR FILES WITHOUT EXTENSIONS
+# =============================================================================
+
+class CustomImageFolder(Dataset):
+    """Custom ImageFolder that accepts files without extensions"""
+    
+    def __init__(self, root, transform=None):
+        self.root = Path(root)
+        self.transform = transform
+        self.samples = []
+        self.targets = []
+        
+        # Get all class directories
+        self.classes = sorted([d.name for d in self.root.iterdir() if d.is_dir()])
+        if not self.classes:
+            raise RuntimeError(f"No class directories found in {root}")
+        
+        self.class_to_idx = {cls_name: idx for idx, cls_name in enumerate(self.classes)}
+        
+        print(f"\n  Scanning for image files in {root}...")
+        
+        # Load all files regardless of extension
+        for class_name in self.classes:
+            class_dir = self.root / class_name
+            class_idx = self.class_to_idx[class_name]
+            file_count = 0
+            
+            for file_path in class_dir.iterdir():
+                if file_path.is_file():
+                    # Try to open the file to verify it's an image
+                    try:
+                        with Image.open(file_path) as img:
+                            img.verify()  # Verify it's an image
+                        self.samples.append((str(file_path), class_idx))
+                        self.targets.append(class_idx)
+                        file_count += 1
+                    except Exception as e:
+                        print(f"  ⚠ Skipping non-image file: {file_path.name} - {e}")
+            
+            print(f"    Class {class_name}: {file_count} images")
+        
+        if not self.samples:
+            raise RuntimeError(f"Found 0 valid image files in {root}")
+        
+        print(f"  Total images found: {len(self.samples)}")
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        path, target = self.samples[idx]
+        
+        # Load image
+        try:
+            img = Image.open(path).convert('RGB')
+        except Exception as e:
+            print(f"Error loading {path}: {e}")
+            # Return a random image from dataset as fallback? 
+            # Better to raise error for now
+            raise
+        
+        if self.transform:
+            img = self.transform(img)
+        
+        return img, target
 
 
 # =============================================================================
@@ -122,27 +194,25 @@ def get_transforms(img_size: int):
 # =============================================================================
 
 def build_datasets(data_dir: Path, img_size: int, val_split: float, seed: int = 42):
-    """Load ImageFolder dataset and split into train/val."""
-    all_class_dirs = sorted([d for d in data_dir.iterdir() if d.is_dir()])
-    if not all_class_dirs:
-        raise ValueError(f"No subdirectories found in {data_dir}")
-
-    unique_classes = sorted([d.name for d in all_class_dirs])
-    class_to_idx = {c: i for i, c in enumerate(unique_classes)}
-    num_classes = len(unique_classes)
-
-    print(f"\n  Dataset root : {data_dir}")
-    print(f"  Total folders: {len(all_class_dirs)}")
-    print(f"  Classes      : {num_classes}")
-
+    """Load CustomImageFolder dataset and split into train/val."""
     train_tf, val_tf = get_transforms(img_size)
-    raw_dataset = datasets.ImageFolder(str(data_dir), transform=train_tf)
-
+    
+    # Use custom dataset that handles files without extensions
+    print(f"\n  Loading dataset from: {data_dir}")
+    raw_dataset = CustomImageFolder(str(data_dir), transform=train_tf)
+    
+    # Get class counts
     from collections import Counter
     counts = Counter(raw_dataset.targets)
-    for cls, idx in sorted(raw_dataset.class_to_idx.items(), key=lambda x: x[1]):
-        print(f"    [{idx:3d}] {cls:<60s} {counts[idx]:4d} images")
-
+    
+    # Reverse mapping for class names
+    idx_to_class = {v: k for k, v in raw_dataset.class_to_idx.items()}
+    
+    print(f"\n  Class distribution:")
+    for idx, count in sorted(counts.items()):
+        print(f"    [{idx:3d}] {idx_to_class[idx]:<60s} {count:4d} images")
+    
+    num_classes = len(raw_dataset.classes)
     n_total = len(raw_dataset)
     n_val   = max(1, int(n_total * val_split))
     n_train = n_total - n_val
@@ -170,13 +240,11 @@ def build_model(num_classes: int, device: torch.device, model_name: str) -> nn.M
         in_features = model.fc.in_features
         model.fc = nn.Linear(in_features, num_classes)
     elif model_name == "dinov2":
-        try:
-            from torchvision.models import dinov2_base
-            model = dinov2_base(weights="IMAGENET1K_V1")
-            in_features = model.head.in_features
-            model.head = nn.Linear(in_features, num_classes)
-        except Exception:
-            raise ImportError("dinov2 not available in torchvision")
+        print("  Loading DINOv2 via Torch Hub...")
+        model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+        # DINOv2 from Hub doesn't have the ImageNet head by default
+        in_features = 768  # ViT-B/14 embedding dimension
+        model.head = nn.Linear(in_features, num_classes)
     elif model_name == "efficientnet":
         model = models.efficientnet_b0(weights="IMAGENET1K_V1")
         in_features = model.classifier[-1].in_features
@@ -243,6 +311,63 @@ def set_trainable(model: nn.Module, stage: str, n_unfreeze_blocks: int = 3) -> N
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total     = sum(p.numel() for p in model.parameters())
     print(f"  Trainable params: {trainable:,} / {total:,}  ({100*trainable/total:.1f}%)")
+
+
+# =============================================================================
+#                              ✅ EARLY STOPPING CLASS
+# =============================================================================
+
+class EarlyStopping:
+    """Early stops the training if validation accuracy doesn't improve."""
+    
+    def __init__(self, patience: int = 7, min_delta: float = 0.001, verbose: bool = True):
+        """
+        Args:
+            patience: Number of epochs to wait after last improvement
+            min_delta: Minimum change to qualify as improvement
+            verbose: Print messages when stopping
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.val_acc_max = -float('inf')
+    
+    def __call__(self, val_acc: float) -> bool:
+        """
+        Returns True if training should stop
+        """
+        if self.best_score is None:
+            # First epoch
+            self.best_score = val_acc
+            self.val_acc_max = val_acc
+            return False
+        
+        elif val_acc < self.best_score + self.min_delta:
+            # No improvement
+            self.counter += 1
+            if self.verbose:
+                print(f"  EarlyStopping: {self.counter}/{self.patience} - no improvement "
+                      f"(best={self.best_score*100:.2f}%, current={val_acc*100:.2f}%)")
+            if self.counter >= self.patience:
+                self.early_stop = True
+                if self.verbose:
+                    print(f"  ⚠ Early stopping triggered after {self.patience} epochs without improvement")
+                return True
+        else:
+            # Improvement found
+            self.best_score = val_acc
+            self.val_acc_max = max(self.val_acc_max, val_acc)
+            self.counter = 0
+            if self.verbose:
+                print(f"  ✓ EarlyStopping: improvement! best={self.best_score*100:.2f}%")
+        
+        return False
+    
+    def get_best_score(self) -> float:
+        return self.val_acc_max
 
 
 # =============================================================================
@@ -330,7 +455,7 @@ def save_backbone(model: nn.Module, output_dir: Path, model_name: str, meta: dic
     Save fine-tuned backbone + metadata.
     
     ✅ Auto-generate filename based on model_name + timestamp
-    Format: model/{model_name}_backbone_{timestamp}.pth
+    Format: model/backbone/{model_name}_backbone_{timestamp}.pth
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -367,6 +492,42 @@ def save_backbone(model: nn.Module, output_dir: Path, model_name: str, meta: dic
 
 
 # =============================================================================
+#                              UTILITIES
+# =============================================================================
+
+def add_image_extensions(data_dir: Path):
+    """Utility function to add .png extension to files without extensions"""
+    print(f"\n  Scanning for files without extensions in {data_dir}...")
+    renamed_count = 0
+    
+    for class_dir in data_dir.iterdir():
+        if class_dir.is_dir():
+            for file_path in class_dir.iterdir():
+                if file_path.is_file() and not file_path.suffix:  # No extension
+                    # Try to determine image type
+                    try:
+                        with Image.open(file_path) as img:
+                            # Save with appropriate extension based on format
+                            if img.format == 'PNG':
+                                new_path = file_path.with_suffix('.png')
+                            elif img.format == 'JPEG':
+                                new_path = file_path.with_suffix('.jpg')
+                            elif img.format == 'WEBP':
+                                new_path = file_path.with_suffix('.webp')
+                            else:
+                                new_path = file_path.with_suffix('.png')  # Default to .png
+                            
+                            file_path.rename(new_path)
+                            print(f"    Renamed: {file_path.name} -> {new_path.name}")
+                            renamed_count += 1
+                    except Exception as e:
+                        print(f"    ⚠ Could not process {file_path.name}: {e}")
+    
+    print(f"  ✅ Renamed {renamed_count} files")
+    return renamed_count
+
+
+# =============================================================================
 #                              MAIN
 # =============================================================================
 
@@ -376,7 +537,7 @@ def main():
                         choices=["mobilenet", "resnet", "dinov2", "efficientnet", "inception"],
                         help="Backbone model to finetune")
     parser.add_argument("--data_dir",  type=Path,  default=DEFAULT_DATA_DIR)
-    parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR,  # ✅ Changed to output_dir
+    parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR,
                         help="Output directory for saved backbone")
     parser.add_argument("--epochs",    type=int,   default=DEFAULT_EPOCHS)
     parser.add_argument("--warmup",    type=int,   default=DEFAULT_WARMUP)
@@ -389,7 +550,23 @@ def main():
     parser.add_argument("--unfreeze",  type=int,   default=DEFAULT_UNFREEZE)
     parser.add_argument("--seed",      type=int,   default=42)
     parser.add_argument("--no_amp",    action="store_true", help="Disable AMP")
+    parser.add_argument("--fix_extensions", action="store_true", 
+                        help="Add image extensions to files without extensions before training")
+    
+    # ✅ Early stopping arguments
+    parser.add_argument("--patience",  type=int,   default=DEFAULT_PATIENCE,
+                        help="Early stopping patience (epochs without improvement)")
+    parser.add_argument("--min_delta", type=float, default=DEFAULT_MIN_DELTA,
+                        help="Minimum improvement to reset early stopping (as fraction, e.g., 0.001 = 0.1%%)")
+    parser.add_argument("--no_early_stop", action="store_true",
+                        help="Disable early stopping")
+    
     args = parser.parse_args()
+
+    # ── Fix extensions if requested ─────────────────────────────────────────
+    if args.fix_extensions:
+        add_image_extensions(args.data_dir)
+        print("\n  Continuing with training...\n")
 
     # ── Device ──────────────────────────────────────────────────────────────
     device  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -407,6 +584,8 @@ def main():
     print(f"  Data dir : {args.data_dir}")
     print(f"  Output   : {args.output_dir}")
     print(f"  Epochs   : {args.epochs}  (warmup={args.warmup})")
+    if not args.no_early_stop:
+        print(f"  Early stopping: patience={args.patience}, min_delta={args.min_delta}")
 
     # ── Dataset ─────────────────────────────────────────────────────────────
     train_ds, val_ds, num_classes = build_datasets(
@@ -431,6 +610,10 @@ def main():
 
     best_val_acc = 0.0
     best_state   = None
+    
+    # ✅ Initialize Early Stopping
+    early_stopping = EarlyStopping(patience=args.patience, min_delta=args.min_delta, verbose=True)
+    stop_training = False
 
     # ══════════════════════════════════════════════════════════════
     #  STAGE 1 — Warmup
@@ -463,57 +646,79 @@ def main():
         if va_acc > best_val_acc:
             best_val_acc = va_acc
             best_state   = {k: v.clone() for k, v in model.state_dict().items()}
+        
+        # ✅ Check early stopping during warmup (optional - can skip warmup early stopping)
+        if not args.no_early_stop and epoch > args.warmup // 2:  # เริ่มตรวจสอบหลังจาก warmup ครึ่งนึง
+            if early_stopping(va_acc):
+                print(f"  ⚠ Early stopping during warmup at epoch {epoch}")
+                stop_training = True
+                break
 
     # ══════════════════════════════════════════════════════════════
     #  STAGE 2 — Fine-tune
     # ══════════════════════════════════════════════════════════════
-    finetune_epochs = args.epochs - args.warmup
-    if finetune_epochs > 0:
-        print(f"\n{'─'*60}")
-        print(f"  STAGE 2: FINETUNE  ({finetune_epochs} epochs, unfreeze={args.unfreeze} blocks)")
-        print(f"{'─'*60}")
+    if not stop_training:
+        finetune_epochs = args.epochs - args.warmup
+        if finetune_epochs > 0:
+            print(f"\n{'─'*60}")
+            print(f"  STAGE 2: FINETUNE  ({finetune_epochs} epochs, unfreeze={args.unfreeze} blocks)")
+            print(f"{'─'*60}")
 
-        set_trainable(model, "finetune", n_unfreeze_blocks=args.unfreeze)
+            set_trainable(model, "finetune", n_unfreeze_blocks=args.unfreeze)
 
-        head, _ = _get_head_and_backbone_blocks(model)
-        head_param_ids = {id(p) for p in head.parameters()}
-        backbone_params = [
-            p for p in model.parameters()
-            if p.requires_grad and id(p) not in head_param_ids
-        ]
-        head_params = [
-            p for p in model.parameters()
-            if p.requires_grad and id(p) in head_param_ids
-        ]
-        optimizer = optim.AdamW([
-            {"params": backbone_params, "lr": args.lr},
-            {"params": head_params,     "lr": args.lr * 5},
-        ], weight_decay=1e-4)
-        scheduler = CosineAnnealingLR(optimizer, T_max=finetune_epochs, eta_min=1e-7)
+            head, _ = _get_head_and_backbone_blocks(model)
+            head_param_ids = {id(p) for p in head.parameters()}
+            backbone_params = [
+                p for p in model.parameters()
+                if p.requires_grad and id(p) not in head_param_ids
+            ]
+            head_params = [
+                p for p in model.parameters()
+                if p.requires_grad and id(p) in head_param_ids
+            ]
+            optimizer = optim.AdamW([
+                {"params": backbone_params, "lr": args.lr},
+                {"params": head_params,     "lr": args.lr * 5},
+            ], weight_decay=1e-4)
+            scheduler = CosineAnnealingLR(optimizer, T_max=finetune_epochs, eta_min=1e-7)
 
-        for epoch in range(1, finetune_epochs + 1):
-            t0 = time.perf_counter()
-            tr_loss, tr_acc = train_one_epoch(
-                model, train_loader, optimizer, criterion, device, use_amp, scaler, epoch
-            )
-            va_loss, va_acc = evaluate(model, val_loader, criterion, device)
-            scheduler.step()
-            elapsed = time.perf_counter() - t0
-            print(
-                f"  Fine-tune [{epoch:3d}/{finetune_epochs}]  "
-                f"train_loss={tr_loss:.4f}  train_acc={tr_acc*100:.1f}%  "
-                f"val_loss={va_loss:.4f}  val_acc={va_acc*100:.1f}%  "
-                f"({elapsed:.1f}s)"
-            )
-            if va_acc > best_val_acc:
-                best_val_acc = va_acc
-                best_state   = {k: v.clone() for k, v in model.state_dict().items()}
-                print(f"  ✓ New best val_acc: {best_val_acc*100:.2f}%")
+            # ✅ Reset early stopping for finetune stage (optional)
+            if not args.no_early_stop:
+                early_stopping = EarlyStopping(patience=args.patience, min_delta=args.min_delta, verbose=True)
+
+            for epoch in range(1, finetune_epochs + 1):
+                t0 = time.perf_counter()
+                tr_loss, tr_acc = train_one_epoch(
+                    model, train_loader, optimizer, criterion, device, use_amp, scaler, epoch
+                )
+                va_loss, va_acc = evaluate(model, val_loader, criterion, device)
+                scheduler.step()
+                elapsed = time.perf_counter() - t0
+                print(
+                    f"  Fine-tune [{epoch:3d}/{finetune_epochs}]  "
+                    f"train_loss={tr_loss:.4f}  train_acc={tr_acc*100:.1f}%  "
+                    f"val_loss={va_loss:.4f}  val_acc={va_acc*100:.1f}%  "
+                    f"({elapsed:.1f}s)"
+                )
+                if va_acc > best_val_acc:
+                    best_val_acc = va_acc
+                    best_state   = {k: v.clone() for k, v in model.state_dict().items()}
+                    print(f"  ✓ New best val_acc: {best_val_acc*100:.2f}%")
+                
+                # ✅ Check early stopping
+                if not args.no_early_stop:
+                    if early_stopping(va_acc):
+                        print(f"  ⚠ Early stopping triggered at fine-tune epoch {epoch}")
+                        break
 
     # ── Restore best weights and save ────────────────────────────────────────
     if best_state is not None:
         model.load_state_dict(best_state)
         print(f"\n  Restored best checkpoint  (val_acc={best_val_acc*100:.2f}%)")
+        
+        # ✅ Get the actual best score from early stopping if available
+        if not args.no_early_stop:
+            best_val_acc = early_stopping.get_best_score()
 
     # ✅ Save with auto-generated filename based on model_name
     saved_path = save_backbone(model, args.output_dir, args.model, {
@@ -523,12 +728,12 @@ def main():
         "best_val_acc"   : round(best_val_acc, 4),
         "data_dir"       : str(args.data_dir),
         "unfreeze_blocks": args.unfreeze,
+        "early_stopped"  : not args.no_early_stop,
+        "patience"       : args.patience if not args.no_early_stop else None,
     })
 
     print(f"\n  ✅ Done!  Best val accuracy: {best_val_acc*100:.2f}%")
-    print(f"  💡 Load in PatchCoreSIFE by setting:\n")
     print(f"    FINETUNED_BACKBONE_PATH = Path(\"{saved_path}\")")
-    print(f"  in config/sife.py\n")
 
 
 if __name__ == "__main__":

@@ -16,9 +16,9 @@ from pathlib import Path
 # =============================================================================
 
 # Data directories
-DATA_ROOT = Path("D:\project\Medicine-AI\MediScan-AI\data")
+DATA_ROOT = Path("D:\project\Medicine-AI\MediScan-AI\data_train_defection")
 SAVE_DIR = Path("./data/inspected")
-BAD_DIR = "data_yolo/calibrate-bad"
+BAD_DIR = "data_yolo\calibrate-bad/"
 
 # YOLO model paths
 # SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
@@ -39,7 +39,11 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 # Classes to train (empty list = train all available classes)
 SELECTED_CLASSES = [
     "black_sphere",
-
+    "brown_cap",
+    "gray_circle",
+    "red_cap",
+    "white_oval",
+    "yellow_circle",
 ]
 
 
@@ -48,13 +52,19 @@ SELECTED_CLASSES = [
 # =============================================================================
 
 # Camera settings
-CAMERA_INDEX = 1
+CAMERA_INDEX = 0
 FRAMES_BEFORE_SUMMARY = 3
 WINDOW_NAME = "Pill Inspector"
 
 # Classes to compare during prediction
 COMPARE_CLASSES = [
-    "black_sphere",
+    # "black_sphere",
+    # "brown_cap",
+    # "gray_circle",
+    # "red_cap",
+    # "white_oval",
+    # "yellow_circle",
+
 ]
 
 

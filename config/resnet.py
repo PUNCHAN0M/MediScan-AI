@@ -24,8 +24,8 @@ from config.base import DEFAULT_FALLBACK_THRESHOLD
 # =============================================================================
 #  BACKBONE
 # =============================================================================
-BACKBONE = "resnet50"
-LAYERS = ["layer2", "layer3"]          # 512 + 1024 = 1536 dim/patch
+BACKBONE = "model/backbone/resnet_backbone_20260226_234833.pth"  #"None"
+LAYERS = ["layer1", "layer2", "layer3"]          # 512 + 1024 = 1536 dim/patch
 
 
 # =============================================================================
@@ -51,10 +51,10 @@ FALLBACK_THRESHOLD = DEFAULT_FALLBACK_THRESHOLD
 # =============================================================================
 #  SCORING
 # =============================================================================
-SCORE_METHOD = "top10_mean"              # "max" (sensitive) | "top5_mean" (balanced)
+SCORE_METHOD = "max"              # "max" (sensitive) | "top5_mean" (balanced)
 # Multiplier applied to the calibrated threshold at inference.
 # 1.0 = trust calibration exactly.  > 1.0 = more lenient.  Tune without retraining.
-THRESHOLD_MULTIPLIER = 1.1
+THRESHOLD_MULTIPLIER = 1
 
 
 # =============================================================================
@@ -62,7 +62,7 @@ THRESHOLD_MULTIPLIER = 1.1
 # =============================================================================
 USE_COLOR_FEATURES = True               # +6 dims (RGB mean/std)
 USE_HSV = True                          # +6 dims (HSV mean/std)
-COLOR_WEIGHT = 0.7                      # keep colour influence mild (was 1.0)
+COLOR_WEIGHT = 1.5                      # keep colour influence mild (was 1.0)
 
 
 # =============================================================================
