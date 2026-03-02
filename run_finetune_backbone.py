@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Fine-tune MobileNetV3-Large Backbone on Custom Dataset
-=======================================================
+Fine-tune ResNet50 Backbone on Custom Dataset
+==============================================
 
-ต่อยอด IMAGENET1K_V1 weights ด้วย dataset ของเราก่อนใช้กับ PatchCore SIFE
+ต่อยอด IMAGENET1K_V1 weights ด้วย dataset ของเราก่อนใช้กับ PatchCore
 
 Dataset format expected:
-    result/
+    data_backbone_augment/
     ├── class1/
     │   ├── image1.jpg
     │   └── image2.jpg
@@ -15,16 +15,16 @@ Dataset format expected:
         └── image2.jpg
 
 Output:
-    model/backbone/{model_name}_backbone_{timestamp}.pth ← โหลดไปใช้กับ PatchCoreSIFE ต่อ
+    model/backbone/resnet_backbone_{timestamp}.pth
 
 Usage:
-    python run_finetune_backbone.py --model=mobilenet
-    python run_finetune_backbone.py --model=resnet
-    python run_finetune_backbone.py --model=dinov2
+    python run_finetune_backbone.py
+    python run_finetune_backbone.py --epochs=30
+    python run_finetune_backbone.py --data_dir=my_data/
 
 Flow:
     Stage 1 (Warmup)  : Freeze backbone → Train classifier only       (5 epochs)
-    Stage 2 (Finetune): Unfreeze last 3 InvertedResidual blocks + train (remaining epochs)
+    Stage 2 (Finetune): Unfreeze last 3 residual blocks + train       (remaining epochs)
 """
 
 import argparse
@@ -532,10 +532,7 @@ def add_image_extensions(data_dir: Path):
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune backbone")
-    parser.add_argument("--model", type=str, default="mobilenet",
-                        choices=["mobilenet", "resnet", "dinov2", "efficientnet", "inception"],
-                        help="Backbone model to finetune")
+    parser = argparse.ArgumentParser(description="Fine-tune ResNet50 backbone")
     parser.add_argument("--data_dir",  type=Path,  default=DEFAULT_DATA_DIR)
     parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR,
                         help="Output directory for saved backbone")
@@ -562,6 +559,7 @@ def main():
                         help="Disable early stopping")
     
     args = parser.parse_args()
+    args.model = "resnet"  # Hardcode resnet
 
     # ── Fix extensions if requested ─────────────────────────────────────────
     if args.fix_extensions:
@@ -578,7 +576,7 @@ def main():
         torch.backends.cudnn.deterministic = False
         
     print(f"\n{'='*60}")
-    print(f"  Fine-tune {args.model.upper()} Backbone")
+    print(f"  Fine-tune RESNET50 Backbone")
     print(f"{'='*60}")
     print(f"  Device   : {device}  (AMP={use_amp})")
     print(f"  Data dir : {args.data_dir}")

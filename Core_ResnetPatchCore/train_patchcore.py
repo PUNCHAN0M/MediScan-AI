@@ -39,22 +39,24 @@ from datetime import datetime
 from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
 from Core_ResnetPatchCore.pipeline.train import TrainPipeline
 
-from config.base import DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS
+from config.base import (
+    DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS,
+    MODEL_OUTPUT_DIR, DEVICE,
+)
 from config.resnet import (
     BACKBONE,
     IMG_SIZE,
     GRID_SIZE,
     CORESET_RATIO,
+    CORESET_MIN_KEEP,
+    CORESET_MAX_KEEP,
     K_NEAREST,
     FALLBACK_THRESHOLD,
-    MODEL_OUTPUT_DIR,
     USE_COLOR_FEATURES,
     USE_HSV,
     COLOR_WEIGHT,
     SCORE_METHOD,
 )
-
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ─────────────────── directory helpers ───────────────────
@@ -104,6 +106,13 @@ def main():
     # If config says 'resnet50' (no file), treat as None → ImageNet pretrained
     if backbone_path and not Path(backbone_path).suffix == ".pth":
         backbone_path = None
+
+    # ตรวจสอบว่าไฟล์ backbone มีจริงหรือไม่
+    if backbone_path and not Path(backbone_path).exists():
+        print(f"  [Warning] Backbone not found: {backbone_path}")
+        print(f"  → ใช้ resnet50 (ImageNet pretrained) แทน")
+        backbone_path = None
+
     backbone_label = backbone_path if backbone_path else "resnet50 (ImageNet pretrained)"
 
     print("=" * 70)

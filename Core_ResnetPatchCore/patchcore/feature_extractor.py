@@ -1,29 +1,5 @@
 """
 ResNet50 Feature Extractor
-==========================
-
-Multi-layer patch feature extraction from pretrained ResNet50.
-
-Architecture
-------------
-::
-
-    input 256×256
-        ↓
-    ResNet50 (frozen)
-        ├── layer2  →  [B, 512,  32, 32]
-        └── layer3  →  [B, 1024, 16, 16]
-               ↓ upsample to 32×32
-        concat →  [B, 1536, 32, 32]
-        adaptive_avg_pool2d  →  [B, 1536, grid, grid]
-        flatten  →  [B × grid², 1536]
-
-Optional color features (appended per patch):
-    +6  RGB mean/std
-    +6  HSV mean/std
-
-Single image  → ``extract(pil_image) → (grid², D)``
-Batch images  → ``extract_batch(list_of_bgr) → list[(grid², D)]``
 """
 from __future__ import annotations
 
@@ -39,33 +15,8 @@ from typing import List, Optional
 
 
 class ResNet50FeatureExtractor:
-    """
-    Frozen ResNet50 backbone → multi-layer patch features.
 
-    Parameters
-    ----------
-    img_size : int
-        Input image resolution (default 256).
-    grid_size : int
-        Number of patches per side.  Total patches = grid × grid (default 16 → 256).
-    device : str or None
-        ``"cuda"`` / ``"cpu"`` (auto-detect if ``None``).
-    use_color_features : bool
-        Append per-patch RGB mean/std (+6 dims).
-    use_hsv : bool
-        Append per-patch HSV mean/std (+6 dims).
-    color_weight : float
-        Scale factor for color dims (1.0 = same scale as CNN features).
-    backbone_path : str or None
-        Path to a custom ``.pth`` backbone weights file.  When provided the
-        ImageNet pretrained weights are NOT loaded; instead the state-dict
-        (or a checkpoint containing ``"state_dict"`` / ``"model"`` key) is
-        loaded from this file.  Useful for domain-finetuned backbones such as
-        ``resnet_backbone.pth``.
-    """
-
-    # backbone layers to hook
-    LAYERS = ("layer1", "layer2", "layer3")  # เดิม: ("layer2", "layer3")
+    LAYERS = ("layer1", "layer2", "layer3")
     LAYER_CHANNELS = {"layer1": 256, "layer2": 512, "layer3": 1024}  # ✅ เพิ่ม layer1: 256
   
     def __init__(

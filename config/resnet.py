@@ -2,14 +2,9 @@
 ResNet50 PatchCore Configuration
 ================================
 
-Backbone : ResNet50 (pretrained, frozen)
-Layers   : layer2 (512 ch) + layer3 (1024 ch) → concat → 1536-dim patches
+Backbone : ResNet50 (pretrained / fine-tuned)
+Layers   : layer1 (256) + layer2 (512) + layer3 (1024) → 1792-dim patches
 Detection: YOLOv12-seg (.pt / .onnx)
-
-Best for:
-- Color anomaly detection (white vs black pills)
-- Small coloured defects (black spots, discolouration)
-- Pills with colour-based quality criteria
 
 Performance:
 - Speed:   Fast  (ResNet50 + FAISS kNN, no backprop)
@@ -17,55 +12,50 @@ Performance:
 - Color:   ★★★★★
 - Shape:   ★★★★
 """
-from pathlib import Path
-from config.base import DEFAULT_FALLBACK_THRESHOLD
+from config.base import DEFAULT_FALLBACK_THRESHOLD, IMAGE_SIZE
 
 
 # =============================================================================
 #  BACKBONE
 # =============================================================================
-BACKBONE = "model/backbone/resnet_last.pth"  #"None"
-LAYERS = ["layer1", "layer2", "layer3"]          # 512 + 1024 = 1536 dim/patch
+BACKBONE = "model/backbone/resnet_last.pth"
+LAYERS = ("layer1", "layer2", "layer3")
+LAYER_CHANNELS = {"layer1": 256, "layer2": 512, "layer3": 1024}
 
 
 # =============================================================================
-#  IMAGE / PATCH
+#  IMAGE / PATCH  (IMAGE_SIZE มาจาก base.py = 256)
 # =============================================================================
-IMG_SIZE = 256                          # input resolution
-GRID_SIZE = 16                          # patches per side  (16 → 256 patches)
+IMG_SIZE = IMAGE_SIZE                   # ใช้ขนาดเดียวกับ base
+GRID_SIZE = 16                          # patches per side → 16×16 = 256 patches
 
 
 # =============================================================================
-#  PATCHCORE
+#  PATCHCORE — MEMORY BANK
 # =============================================================================
-CORESET_RATIO = 0.25                    # fraction of patches to keep
-K_NEAREST = 3                           # kNN neighbours for scoring
+CORESET_RATIO = 0.25                    # fraction ที่เก็บจาก raw patches
+CORESET_MIN_KEEP = 1_000               # จำนวน patch ขั้นต่ำที่เก็บ
+CORESET_MAX_KEEP = 20_000              # จำนวน patch สูงสุดที่เก็บ
 
 
 # =============================================================================
-#  THRESHOLD
+#  PATCHCORE — SCORING
 # =============================================================================
+K_NEAREST = 3                           # kNN neighbours
+SCORE_METHOD = "max"                    # "max" | "top1_mean" | "top5_mean" | "top10_mean"
+THRESHOLD_MULTIPLIER = 1.0              # คูณ threshold ตอน inference (>1 = ผ่อนปรน)
 FALLBACK_THRESHOLD = DEFAULT_FALLBACK_THRESHOLD
 
 
 # =============================================================================
-#  SCORING
-# =============================================================================
-SCORE_METHOD = "max"              # "max" (sensitive) | "top5_mean" (balanced)
-# Multiplier applied to the calibrated threshold at inference.
-# 1.0 = trust calibration exactly.  > 1.0 = more lenient.  Tune without retraining.
-THRESHOLD_MULTIPLIER = 1
-
-
-# =============================================================================
-#  COLOR FEATURES  (optional, appended to CNN features)
+#  COLOR FEATURES  (ต่อท้าย CNN features)
 # =============================================================================
 USE_COLOR_FEATURES = True               # +6 dims (RGB mean/std)
 USE_HSV = True                          # +6 dims (HSV mean/std)
-COLOR_WEIGHT = 1.5                      # keep colour influence mild (was 1.0)
+COLOR_WEIGHT = 1.5                      # น้ำหนักของ color features
 
 
 # =============================================================================
-#  MODEL OUTPUT
+#  FINE-TUNE BACKBONE
 # =============================================================================
-MODEL_OUTPUT_DIR = Path("./model/patchcore_resnet")
+N_STEPS = 351                           # training steps สำหรับ fine-tune

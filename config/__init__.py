@@ -2,50 +2,55 @@
 MediScan-AI Configuration Package
 =================================
 
-Configuration modules for different PatchCore backbones.
-
 Usage:
-    from config.base import *           # Common settings
-    from config.mobilenet import *      # MobileNet settings
-    from config.resnet import *         # ResNet settings  
-    from config.dinov2 import *         # DINOv2 settings
-    from config.cnnmultiscale import *  # CNN Multi-Scale settings
+    from config.base import *           # Common settings (paths, YOLO, camera)
+    from config.resnet import *         # ResNet PatchCore settings
 """
 
 from config.base import (
+    # Device
+    DEVICE,
+    # Image
+    IMAGE_SIZE,
+    IMAGE_EXTS,
     # Paths
     DATA_ROOT,
+    BAD_DIR,
     SAVE_DIR,
-    SEGMENTATION_MODEL_PATH,
+    MODEL_OUTPUT_DIR,
+    # YOLO Detection
     DETECTION_MODEL_PATH,
-    
-    # Training
-    SEED,
-    IMAGE_EXTS,
-    SELECTED_CLASSES,
-    
-    # Prediction
+    DETECTION_CONF,
+    DETECTION_IOU,
+    # YOLO Segmentation
+    SEGMENTATION_MODEL_PATH,
+    SEGMENTATION_CONF,
+    SEGMENTATION_IOU,
+    SEGMENTATION_PAD,
+    # Camera
     CAMERA_INDEX,
     FRAMES_BEFORE_SUMMARY,
     WINDOW_NAME,
+    # Tracking
+    TRACK_MAX_DISTANCE,
+    TRACK_IOU_THRESHOLD,
+    TRACK_MAX_AGE,
+    # Training
+    SEED,
+    SELECTED_CLASSES,
+    # Prediction
     COMPARE_CLASSES,
+    DEFAULT_FALLBACK_THRESHOLD,
 )
 
 __all__ = [
-    # Paths
-    "DATA_ROOT",
-    "SAVE_DIR",
-    "SEGMENTATION_MODEL_PATH",
-    "DETECTION_MODEL_PATH",
-    
-    # Training
-    "SEED",
-    "IMAGE_EXTS",
-    "SELECTED_CLASSES",
-    
-    # Prediction
-    "CAMERA_INDEX",
-    "FRAMES_BEFORE_SUMMARY",
-    "WINDOW_NAME",
-    "COMPARE_CLASSES",
+    "DEVICE",
+    "IMAGE_SIZE", "IMAGE_EXTS",
+    "DATA_ROOT", "BAD_DIR", "SAVE_DIR", "MODEL_OUTPUT_DIR",
+    "DETECTION_MODEL_PATH", "DETECTION_CONF", "DETECTION_IOU",
+    "SEGMENTATION_MODEL_PATH", "SEGMENTATION_CONF", "SEGMENTATION_IOU", "SEGMENTATION_PAD",
+    "CAMERA_INDEX", "FRAMES_BEFORE_SUMMARY", "WINDOW_NAME",
+    "TRACK_MAX_DISTANCE", "TRACK_IOU_THRESHOLD", "TRACK_MAX_AGE",
+    "SEED", "SELECTED_CLASSES",
+    "COMPARE_CLASSES", "DEFAULT_FALLBACK_THRESHOLD",
 ]

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-import torch
 import faiss
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,60 +45,83 @@ from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
 from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
 from Core_ResnetPatchCore.pipeline.visualizer import draw_pill_results, draw_summary
 
+from config.base import (
+    SEGMENTATION_MODEL_PATH,
+    SEGMENTATION_CONF,
+    SEGMENTATION_IOU,
+    SEGMENTATION_PAD,
+    MODEL_OUTPUT_DIR,
+    IMAGE_SIZE,
+    TRACK_MAX_DISTANCE,
+    TRACK_IOU_THRESHOLD,
+    TRACK_MAX_AGE,
+    FRAMES_BEFORE_SUMMARY,
+    DEVICE as BASE_DEVICE,
+)
+from config.resnet import (
+    IMG_SIZE,
+    GRID_SIZE,
+    K_NEAREST,
+    SCORE_METHOD,
+    THRESHOLD_MULTIPLIER,
+    USE_COLOR_FEATURES,
+    USE_HSV,
+    COLOR_WEIGHT,
+    BACKBONE,
+)
+
 
 # ─────────────────────────────────────────────────────────
 #  Configuration
 # ─────────────────────────────────────────────────────────
 @dataclass
 class InspectorConfig:
-    """All tuneable knobs for PillInspector."""
+    """All tuneable knobs for PillInspector — defaults from config/base.py + config/resnet.py."""
 
-    # classes to compare each pill against (from config/base.py)
+    # classes to compare each pill against
     compare_classes: List[str] = field(default_factory=list)
-    model_dir: Path = field(
-        default_factory=lambda: Path("./model/patchcore_resnet"))
+    model_dir: Path = field(default_factory=lambda: Path(MODEL_OUTPUT_DIR))
 
-    # ── YOLO ──
-    yolo_model_path: str = "model/pill-detection-best-2.pt"
-    yolo_det_model_path: Optional[str] = None   # unused, kept for compat
+    # ── YOLO Segmentation ──
+    yolo_model_path: str = str(SEGMENTATION_MODEL_PATH)
     img_size: int = 512
-    conf: float = 0.5
-    iou: float = 0.6
-    pad: int = 5
+    conf: float = SEGMENTATION_CONF
+    iou: float = SEGMENTATION_IOU
+    pad: int = SEGMENTATION_PAD
 
-    # ── feature extractor ──
-    model_size: int = 256
-    grid_size: int = 16
-    use_color_features: bool = False
-    use_hsv: bool = False
-    color_weight: float = 0.3          # keep colour influence mild
+    # ── Feature Extractor ──
+    model_size: int = IMG_SIZE
+    grid_size: int = GRID_SIZE
+    use_color_features: bool = USE_COLOR_FEATURES
+    use_hsv: bool = USE_HSV
+    color_weight: float = COLOR_WEIGHT
 
-    # ── scoring ──
-    k_nearest: int = 3
-    score_method: str = "top5_mean"   # "max" | "top1_mean" | "top5_mean | "top10_mean" (balanced)
-    threshold_multiplier: float = 1  # small buffer above calibrated thr
+    # ── Scoring ──
+    k_nearest: int = K_NEAREST
+    score_method: str = SCORE_METHOD
+    threshold_multiplier: float = THRESHOLD_MULTIPLIER
 
-    # ── backbone ──
-    backbone_path: Optional[str] = None      # custom .pth backbone
+    # ── Backbone ──
+    backbone_path: Optional[str] = BACKBONE if BACKBONE and str(BACKBONE).endswith(".pth") else None
 
-    # ── crop ──
-    crop_size: int = 256
+    # ── Crop ──
+    crop_size: int = IMAGE_SIZE
     bg_value: int = 0
 
-    # ── tracking (realtime) ──
-    track_max_distance: float = 80.0
-    track_iou_threshold: float = 0.80
-    track_max_age: int = 10
+    # ── Tracking (realtime) ──
+    track_max_distance: float = TRACK_MAX_DISTANCE
+    track_iou_threshold: float = TRACK_IOU_THRESHOLD
+    track_max_age: int = TRACK_MAX_AGE
     merge_dist_px: int = 60
 
-    # ── voting ──
-    frames_before_summary: int = 3
+    # ── Voting ──
+    frames_before_summary: int = FRAMES_BEFORE_SUMMARY
 
     device: Optional[str] = None
 
     def __post_init__(self):
         if self.device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.device = BASE_DEVICE
         self.model_dir = Path(self.model_dir)
 
 

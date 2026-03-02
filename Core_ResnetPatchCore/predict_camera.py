@@ -66,8 +66,6 @@ from Core_ResnetPatchCore.pipeline.visualizer import (
 )
 
 from config.base import (
-    SEGMENTATION_MODEL_PATH,
-    DETECTION_MODEL_PATH,
     SAVE_DIR,
     COMPARE_CLASSES,
     CAMERA_INDEX,
@@ -75,14 +73,9 @@ from config.base import (
     WINDOW_NAME,
 )
 from config.resnet import (
-    BACKBONE,
-    MODEL_OUTPUT_DIR,
-    IMG_SIZE,
-    GRID_SIZE,
-    K_NEAREST,
     USE_COLOR_FEATURES,
     USE_HSV,
-    COLOR_WEIGHT,
+    GRID_SIZE,
 )
 
 
@@ -280,20 +273,9 @@ def run_camera(inspector: PillInspector) -> None:
 def main():
     print("Initializing ResNet50 PatchCore Inspector ...")
 
-    # Resolve backbone path from config
-    backbone_path = BACKBONE if BACKBONE and BACKBONE.endswith(".pth") else None
-
+    # InspectorConfig defaults come from config/base.py + config/resnet.py
     config = InspectorConfig(
         compare_classes=list(COMPARE_CLASSES),
-        model_dir=MODEL_OUTPUT_DIR,
-        yolo_model_path=str(SEGMENTATION_MODEL_PATH),
-        model_size=IMG_SIZE,
-        grid_size=GRID_SIZE,
-        k_nearest=K_NEAREST,
-        use_color_features=USE_COLOR_FEATURES,
-        use_hsv=USE_HSV,
-        color_weight=COLOR_WEIGHT,
-        backbone_path=backbone_path,
     )
 
     inspector = PillInspector(config)
