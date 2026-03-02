@@ -62,6 +62,9 @@ class YOLOSegmentor:
         track_max_distance: float = 80.0,
         track_iou_threshold: float = 0.80,
         track_max_age: int = 10,
+        # box size filter (fraction of frame area)
+        min_box_area_frac: float = 0.001,   # ignore boxes < 0.1% of frame
+        max_box_area_frac: float = 0.90,    # ignore boxes > 90% of frame
     ):
         suffix = Path(model_path).suffix.lower()
         if suffix not in self.SUPPORTED_EXTS:
@@ -76,6 +79,15 @@ class YOLOSegmentor:
         self.conf = conf
         self.iou = iou
         self.device = device
+        self.min_box_area_frac = min_box_area_frac
+        self.max_box_area_frac = max_box_area_frac
+
+        # For ONNX: NMS conf is baked into the graph at export time and cannot
+        # be changed at runtime via model() arguments.  Setting overrides here
+        # is a best-effort attempt; the manual filter in detect() is the real
+        # enforcement layer.
+        self.model.overrides["conf"] = conf
+        self.model.overrides["iou"] = iou
 
         # tracking state
         self._tracking_enabled = enable_tracking
@@ -85,9 +97,13 @@ class YOLOSegmentor:
         self._iou_thr = track_iou_threshold
         self._max_age = track_max_age
 
+        # debug: print raw conf histogram for first N frames
+        self._debug_frames_left: int = 3
+
         tag = "ONNX" if suffix == ".onnx" else "PyTorch"
         print(f"[YOLOSegmentor] {model_path} ({tag}) | "
-              f"img={img_size} conf={conf} iou={iou}")
+              f"img={img_size} conf={conf} iou={iou} "
+              f"area=[{min_box_area_frac:.3f}, {max_box_area_frac:.2f}]")
 
     # ─────────────────────────────────────────────────────
     #  Detection
@@ -123,6 +139,40 @@ class YOLOSegmentor:
                 masks_data = r.masks.data.cpu().numpy()
 
             fh, fw = frame.shape[:2]
+            frame_area = fh * fw
+
+            # ── DEBUG: print raw conf values for the first few frames ────────
+            if self._debug_frames_left > 0:
+                self._debug_frames_left -= 1
+                if len(confs):
+                    print(f"[YOLO DEBUG] raw detections={len(confs)} "
+                          f"conf min={confs.min():.3f} max={confs.max():.3f} "
+                          f"mean={confs.mean():.3f}  "
+                          f"(filter threshold={self.conf})")
+                else:
+                    print(f"[YOLO DEBUG] raw detections=0")
+            # ─────────────────────────────────────────────────────────────────
+
+            # ── 1. Conf filter (manual — ONNX ignores the conf kwarg) ────────
+            keep = confs >= self.conf
+            boxes = boxes[keep]
+            confs = confs[keep]
+            cls_ids = cls_ids[keep]
+            if masks_data is not None:
+                masks_data = masks_data[keep]
+
+            # ── 2. Box-area filter — remove tiny noise / full-frame boxes ────
+            if len(boxes):
+                widths  = (boxes[:, 2] - boxes[:, 0]).clip(0)
+                heights = (boxes[:, 3] - boxes[:, 1]).clip(0)
+                areas   = (widths * heights).astype(float) / frame_area
+                area_keep = (areas >= self.min_box_area_frac) & (areas <= self.max_box_area_frac)
+                boxes   = boxes[area_keep]
+                confs   = confs[area_keep]
+                cls_ids = cls_ids[area_keep]
+                if masks_data is not None:
+                    masks_data = masks_data[area_keep]
+            # ─────────────────────────────────────────────────────────────────
 
             for i, (box, c, cid) in enumerate(zip(boxes, confs, cls_ids)):
                 x1, y1, x2, y2 = box

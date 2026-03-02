@@ -46,7 +46,7 @@ from PIL import Image
 #                              DEFAULTS
 # =============================================================================
 
-DEFAULT_DATA_DIR   = Path("data_backbone_augment/")
+DEFAULT_DATA_DIR   = Path("data_train_backbone/")
 DEFAULT_OUTPUT_DIR = Path("model/backbone/")          # ✅ เปลี่ยนเป็นโฟลเดอร์แทนไฟล์
 DEFAULT_EPOCHS     = 20                      # ✅ ปรับค่า default ให้เหมาะสม
 DEFAULT_WARMUP     = 5

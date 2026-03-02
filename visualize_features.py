@@ -54,8 +54,8 @@ def main():
     # 🧠 BACKBONES
     # =============================
     BACKBONE_CONFIG = {
-        "FineTuned_before": 'model/backbone/resnet_backbone_20260226_234833.pth',
-        "FineTuned_after": "model/backbone/resnet_backbone_20260227_152310.pth",
+        "FineTuned_before": 'model/backbone/resnet_backbone_20260302_160330.pth',
+        # "FineTuned_after": "model/backbone/resnet_backbone_20260227_152310.pth",
     }
 
     extractors = {}
