@@ -91,7 +91,7 @@ COMPARE_CLASSES = [
     # "vitaminc",
     # "white_oval",
     # "white_smaill_circle",
-    "XELJANZ5mg",
+    # "XELJANZ5mg",
     # "yellow_circle",
     # "ZYMRON15",
 ]
