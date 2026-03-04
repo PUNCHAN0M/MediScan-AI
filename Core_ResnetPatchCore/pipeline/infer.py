@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from Core_ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor
+from Core_ResnetPatchCore.segmentation.yolo_tracking import YOLOTracking
 from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
 from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
 from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
@@ -149,13 +149,16 @@ class PillInspector:
     def _init_components(self) -> None:
         cfg = self.config
 
-        # YOLO segmentor (supports .pt + .onnx)
-        self._segmentor = YOLOSegmentor(
+        # YOLO segmentation + tracking (supports .pt + .onnx)
+        self._segmentor = YOLOTracking(
             model_path=cfg.yolo_model_path,
             img_size=cfg.img_size,
             conf=cfg.conf,
             iou=cfg.iou,
             device=cfg.device,
+            target_size=cfg.crop_size,
+            pad=cfg.pad,
+            bg_value=cfg.bg_value,
             enable_tracking=True,
             track_max_distance=cfg.track_max_distance,
             track_iou_threshold=cfg.track_iou_threshold,
@@ -483,5 +486,5 @@ class PillInspector:
         return {tid: v.get("ANOMALY", 0) for tid, v in self._votes.items()}
 
     @property
-    def detector(self) -> YOLOSegmentor:
+    def detector(self) -> YOLOTracking:
         return self._segmentor

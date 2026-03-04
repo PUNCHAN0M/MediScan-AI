@@ -9,7 +9,7 @@ Detection: YOLOv12-seg  (.pt + .onnx)
 
 Modules
 -------
-``segmentation``  — YOLOSegmentor  (detect + mask-crop pills)
+``segmentation``  — YOLOTracking  (detect + mask-crop + tracking)
 ``patchcore``     — feature extractor, memory bank, scorer
 ``pipeline``      — train / infer / visualizer
 
@@ -29,7 +29,7 @@ Quick start
 from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
 from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank, CoresetSampler
 from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
-from Core_ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor, PillDetection
+from Core_ResnetPatchCore.segmentation.yolo_tracking import YOLOTracking, PillDetection
 from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
 from Core_ResnetPatchCore.pipeline.train import TrainPipeline
 
@@ -40,7 +40,7 @@ __all__ = [
     "CoresetSampler",
     "PatchCoreScorer",
     # segmentation
-    "YOLOSegmentor",
+    "YOLOTracking",
     "PillDetection",
     # pipeline
     "PillInspector",

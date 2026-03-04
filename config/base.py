@@ -33,7 +33,7 @@ MODEL_OUTPUT_DIR     = Path("./model/patchcore_resnet")
 # =============================================================================
 #                          YOLO DETECTION
 # =============================================================================
-DETECTION_MODEL_PATH     = "model/SEGMENTATION/pill-detection-best-2.pt"
+DETECTION_MODEL_PATH     = "model/SEGMENTATION/pill-detection-best-2.onnx"
 DETECTION_IMG_SIZE       = 512
 DETECTION_CONF           = 0.5
 DETECTION_IOU            = 0.6
@@ -42,7 +42,7 @@ DETECTION_IOU            = 0.6
 # =============================================================================
 #                        YOLO SEGMENTATION
 # =============================================================================
-SEGMENTATION_MODEL_PATH  = "model/SEGMENTATION/pill-detection-best-2.pt"
+SEGMENTATION_MODEL_PATH  = "model/SEGMENTATION/pill-detection-best-2.onnx"
 SEGMENTATION_IMG_SIZE    = 512
 SEGMENTATION_CONF        = 0.5
 SEGMENTATION_IOU         = 0.6
@@ -76,7 +76,7 @@ SELECTED_CLASSES: list[str] = []          # ว่าง = train ทุก class
 #                          PREDICTION
 # =============================================================================
 COMPARE_CLASSES = [
-    "Androxsil",
+    # "Androxsil",
     # "ANTA1mg",
     # "Baclofen",
     # "Bestatin20",
@@ -98,7 +98,7 @@ COMPARE_CLASSES = [
     # "LOSARTAN_POTASSIUM50mg",
     # "NOXA20",
     # "panadol",
-    # "paracap",
+    "paracap",
     # "pink_circle",
     # "Pregabalin25mg",
     # "Quetiepine25mg",

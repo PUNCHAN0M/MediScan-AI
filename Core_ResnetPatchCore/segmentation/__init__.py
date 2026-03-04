@@ -1,3 +1,3 @@
-from .yolo_infer import YOLOSegmentor, PillDetection
+from .yolo_tracking import YOLOTracking, PillDetection
 
-__all__ = ["YOLOSegmentor", "PillDetection"]
+__all__ = ["YOLOTracking", "PillDetection"]

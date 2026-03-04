@@ -113,6 +113,7 @@ typer-slim==0.21.0
 typeshed-client==2.8.2
 typing-extensions==4.15.0
 tzdata==2025.3
+PyQt6>=6.5
 ultralytics==8.4.14
 ultralytics-thop==2.0.18
 urllib3==2.6.2
