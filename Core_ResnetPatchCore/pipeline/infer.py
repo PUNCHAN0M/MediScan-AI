@@ -1,50 +1,21 @@
+#Core_ResnetPatchCore\pipeline\infer.py
 """
-Inference Pipeline
-==================
-
-Folder-based and realtime pill inspection.
-
-Classes
--------
-``InspectorConfig``
-    Dataclass with all tuneable knobs.
-``PillInspector``
-    Main façade — detect → crop → extract → score → classify.
-
-Output format
--------------
-::
-
-    {
-        "count": 50,
-        "bad_count": 3,
-        "bad_pills":  [{"bbox": [x1,y1,x2,y2], "score": 0.87, …}, …],
-        "good_count": 47,
-        "good_pills": [{"bbox": [x1,y1,x2,y2], "score": 0.12, …}, …],
-    }
-
-Realtime flow
--------------
-::
-
-    frame → classify_anomaly() → preview image  (repeat N frames)
-    → summarize() → JSON result with majority vote
+Inference Pipeline — ใช้ DatasetManager สำหรับโหลด model
+========================================================
 """
 from __future__ import annotations
-
 import cv2
 import numpy as np
 import faiss
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
-
 from Core_ResnetPatchCore.segmentation.yolo_tracking import YOLOTracking
 from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
 from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
 from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
 from Core_ResnetPatchCore.pipeline.visualizer import draw_pill_results, draw_summary
-
+from Core_ResnetPatchCore.utils.structure_manager import DatasetManager  # ✅ เพิ่ม import
 from config.base import (
     SEGMENTATION_MODEL_PATH,
     SEGMENTATION_CONF,
@@ -71,52 +42,32 @@ from config.resnet import (
 )
 
 
-# ─────────────────────────────────────────────────────────
-#  Configuration
-# ─────────────────────────────────────────────────────────
 @dataclass
 class InspectorConfig:
-    """All tuneable knobs for PillInspector — defaults from config/base.py + config/resnet.py."""
-
-    # classes to compare each pill against
+    """All tuneable knobs for PillInspector."""
     compare_classes: List[str] = field(default_factory=list)
     model_dir: Path = field(default_factory=lambda: Path(MODEL_OUTPUT_DIR))
-
-    # ── YOLO Segmentation ──
     yolo_model_path: str = str(SEGMENTATION_MODEL_PATH)
     img_size: int = 512
     conf: float = SEGMENTATION_CONF
     iou: float = SEGMENTATION_IOU
     pad: int = SEGMENTATION_PAD
-
-    # ── Feature Extractor ──
     model_size: int = IMG_SIZE
     grid_size: int = GRID_SIZE
     use_color_features: bool = USE_COLOR_FEATURES
     use_hsv: bool = USE_HSV
     color_weight: float = COLOR_WEIGHT
-
-    # ── Scoring ──
     k_nearest: int = K_NEAREST
     score_method: str = SCORE_METHOD
     threshold_multiplier: float = THRESHOLD_MULTIPLIER
-
-    # ── Backbone ──
     backbone_path: Optional[str] = BACKBONE if BACKBONE and str(BACKBONE).endswith(".pth") else None
-
-    # ── Crop ──
     crop_size: int = IMAGE_SIZE
     bg_value: int = 0
-
-    # ── Tracking (realtime) ──
     track_max_distance: float = TRACK_MAX_DISTANCE
     track_iou_threshold: float = TRACK_IOU_THRESHOLD
     track_max_age: int = TRACK_MAX_AGE
     merge_dist_px: int = 60
-
-    # ── Voting ──
     frames_before_summary: int = FRAMES_BEFORE_SUMMARY
-
     device: Optional[str] = None
 
     def __post_init__(self):
@@ -125,31 +76,17 @@ class InspectorConfig:
         self.model_dir = Path(self.model_dir)
 
 
-# ─────────────────────────────────────────────────────────
-#  PillInspector
-# ─────────────────────────────────────────────────────────
 class PillInspector:
-    """
-    Main pill anomaly inspector.
-
-    Supports **both** camera (frame-by-frame) and folder-based prediction.
-
-    Multi-class comparison
-    ~~~~~~~~~~~~~~~~~~~~~~
-    Each pill is compared against every class in ``compare_classes``.
-    If **any** class scores ≤ its threshold → pill is **NORMAL**.
-    """
+    """Main pill anomaly inspector."""
 
     def __init__(self, config: Optional[InspectorConfig] = None):
         self.config = config or InspectorConfig()
+        self._dataset_mgr = DatasetManager(root=self.config.model_dir, auto_create=False)  # ✅ เพิ่ม
         self._init_components()
         self._init_state()
 
-    # ─────────────────── init ───────────────────
     def _init_components(self) -> None:
         cfg = self.config
-
-        # YOLO segmentation + tracking (supports .pt + .onnx)
         self._segmentor = YOLOTracking(
             model_path=cfg.yolo_model_path,
             img_size=cfg.img_size,
@@ -164,8 +101,6 @@ class PillInspector:
             track_iou_threshold=cfg.track_iou_threshold,
             track_max_age=cfg.track_max_age,
         )
-
-        # ResNet50 feature extractor
         self._extractor = ResNet50FeatureExtractor(
             img_size=cfg.model_size,
             grid_size=cfg.grid_size,
@@ -175,17 +110,13 @@ class PillInspector:
             color_weight=cfg.color_weight,
             backbone_path=cfg.backbone_path,
         )
-
-        # scorer
         self._scorer = PatchCoreScorer(k_nearest=cfg.k_nearest)
-
-        # lazy-loaded per-class FAISS indices
         self._indices: Dict[str, faiss.Index] = {}
         self._thresholds: Dict[str, float] = {}
         self._subclass_map: Dict[str, List[str]] = {}
 
     def _init_state(self) -> None:
-        """Clear per-session state (votes, frame buffer)."""
+        """Clear per-session state."""
         self._votes: Dict[int, Dict[str, Any]] = {}
         self._last_frame: Optional[np.ndarray] = None
         self._last_results: List[Dict[str, Any]] = []
@@ -196,6 +127,7 @@ class PillInspector:
         if parent in self._subclass_map:
             return self._subclass_map[parent]
 
+        # ✅ ใช้ DatasetManager แทน manual scan
         parent_dir = self.config.model_dir / parent
         if parent_dir.is_dir():
             subs = [f.stem for f in parent_dir.glob("*.pth")]
@@ -238,11 +170,7 @@ class PillInspector:
         feats: np.ndarray,
         classes: List[str],
     ) -> Tuple[str, Dict[str, float], List[str]]:
-        """
-        Score one pill's features against all compare classes.
-
-        Returns ``(status, class_scores, normal_from)``.
-        """
+        """Score one pill's features against all compare classes."""
         if feats is None or feats.shape[0] == 0:
             return "NORMAL", {}, []
 
@@ -260,6 +188,7 @@ class PillInspector:
             for sub in subs:
                 if not self._ensure_index(sub, parent):
                     continue
+
                 s = self._scorer.score_pill(
                     feats, self._indices[sub],
                     method=self.config.score_method,
@@ -272,22 +201,17 @@ class PillInspector:
         return status, scores, normal_from
 
     # ═════════════════════════════════════════════════════════
-    #  REALTIME  (per-frame + vote accumulation)
+    #  REALTIME
     # ═════════════════════════════════════════════════════════
     def classify_anomaly(
         self,
         frame: np.ndarray,
         class_names: Optional[Sequence[str]] = None,
     ) -> np.ndarray:
-        """
-        Process **one frame**: detect → crop → batch extract → score → vote.
-
-        Returns annotated preview image.
-        """
+        """Process one frame: detect → crop → batch extract → score → vote."""
         classes = list(class_names or self.config.compare_classes)
         self._last_frame = frame.copy()
 
-        # 1. YOLO detect + crop
         crops, infos = self._segmentor.detect_and_crop(
             frame,
             target_size=self.config.crop_size,
@@ -295,17 +219,14 @@ class PillInspector:
             pad=self.config.pad,
         )
 
-        # 2. Batch feature extraction  ← 🔥 speed trick
         batch_feats = self._extractor.extract_batch(crops) if crops else []
 
-        # 3. Per-pill classification
         frame_results: List[Dict[str, Any]] = []
         frame_crops: Dict[int, np.ndarray] = {}
 
         for i, (crop, info) in enumerate(zip(crops, infos)):
             tid = int(info.get("track_id", -1))
             feats = batch_feats[i]
-
             status, scores, normal_from = self._classify_pill(feats, classes)
 
             frame_results.append({
@@ -316,11 +237,9 @@ class PillInspector:
                 "class_scores": scores,
                 "normal_from": normal_from,
             })
-
             if tid >= 0:
                 frame_crops[tid] = crop
 
-        # 4. De-dup: keep highest conf per track_id
         best: Dict[int, Dict] = {}
         for r in frame_results:
             tid = r["id"]
@@ -329,7 +248,6 @@ class PillInspector:
             if tid not in best or r["conf"] > best[tid]["conf"]:
                 best[tid] = r
 
-        # 5. Vote accumulation
         for tid, r in best.items():
             if tid not in self._votes:
                 self._votes[tid] = {
@@ -351,28 +269,14 @@ class PillInspector:
         return draw_pill_results(self._last_frame, self._last_results)
 
     # ═════════════════════════════════════════════════════════
-    #  SINGLE-IMAGE prediction  → JSON
+    #  SINGLE-IMAGE prediction
     # ═════════════════════════════════════════════════════════
     def predict_image(
         self,
         image: np.ndarray,
         class_names: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
-        """
-        Predict anomalies in **one image** (folder-based mode).
-
-        Returns
-        -------
-        ::
-
-            {
-                "count":      int,
-                "bad_count":  int,
-                "bad_pills":  [{"bbox": [...], "score": float}, …],
-                "good_count": int,
-                "good_pills": [{"bbox": [...], "score": float}, …],
-            }
-        """
+        """Predict anomalies in one image."""
         classes = list(class_names or self.config.compare_classes)
 
         crops, infos = self._segmentor.detect_and_crop(
@@ -389,8 +293,7 @@ class PillInspector:
 
         for i, (_, info) in enumerate(zip(crops, infos)):
             feats = batch_feats[i]
-            status, all_scores, normal_from = self._classify_pill(
-                feats, classes)
+            status, all_scores, normal_from = self._classify_pill(feats, classes)
 
             pill = {
                 "bbox": list(info["bbox"]),
@@ -400,6 +303,8 @@ class PillInspector:
             }
             if normal_from:
                 pill["matched_class"] = normal_from
+
+            if normal_from:
                 good_pills.append(pill)
             else:
                 bad_pills.append(pill)
@@ -413,15 +318,10 @@ class PillInspector:
         }
 
     # ═════════════════════════════════════════════════════════
-    #  SUMMARY  (majority vote across frames)
+    #  SUMMARY
     # ═════════════════════════════════════════════════════════
     def summarize(self) -> Dict[str, Any]:
-        """
-        Majority-vote summary over all accumulated frames.
-
-        Returns dict with ``image``, ``count``, ``good_count / bad_count``,
-        ``good_pills / bad_pills``.
-        """
+        """Majority-vote summary over all accumulated frames."""
         if self._last_frame is None:
             return {
                 "image": None, "count": 0,
@@ -438,7 +338,6 @@ class PillInspector:
             n_ok = v.get("NORMAL", 0)
             n_bad = v.get("ANOMALY", 0)
             status = "NORMAL" if n_ok > n_bad else "ANOMALY"
-
             best = v.get("best_scores", {})
             score = round(min(best.values()) if best else 0.0, 4)
 
@@ -447,7 +346,6 @@ class PillInspector:
                 "score": score,
                 "votes": {"NORMAL": n_ok, "ANOMALY": n_bad},
             }
-
             if status == "NORMAL":
                 good_pills.append(pill)
             else:

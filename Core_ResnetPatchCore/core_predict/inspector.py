@@ -1,3 +1,4 @@
+# Core_ResnetPatchCore\core_predict\inspector.py
 """Backward-compatibility shim — ``run_predict.py`` imports from here."""
 from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
 

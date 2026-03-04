@@ -1,3 +1,4 @@
+#Core_ResnetPatchCore\patchcore\feature_extractor.py
 """
 ResNet50 Feature Extractor
 """

@@ -1,70 +1,22 @@
-#!/usr/bin/env python3
-# ResnetPatchCore/predict_camera.py
+#Core_ResnetPatchCore\predict_camera.py
 """
-Realtime Pill Inspection — ResNet50 PatchCore
-=============================================
-
-Flow (per frame)
-----------------
-::
-
-    camera frame
-        ↓
-    YOLOv12-seg  → instance masks + bboxes
-        ↓
-    per-pill crop (mask × frame, pad to 256×256)
-        ↓
-    batch ResNet50 feature extraction  (layer2+layer3)
-        ↓
-    PatchCore kNN scoring  (compare against COMPARE_CLASSES)
-        ↓
-    vote accumulation → majority vote → summary
-        ↓
-    output JSON:
-        { count, bad_count, bad_pills, good_count, good_pills }
-
-Console output per pill
------------------------
-::
-
-    [ID:1] ✗ ANOMALY
-        vitaminc_front: 0.3841 > 0.3628 → ANOMALY
-        vitaminc_back:  0.3781 > 0.3278 → ANOMALY
-        paracap:        0.6313 > 0.3663 → ANOMALY
-    [ID:2] ✓ NORMAL
-        paracap: 0.3159 ≤ 0.3663 → NORMAL
-        Normal from: paracap
-
-Hotkeys
--------
-    s      Save current crops
-    r      Reset votes and tracking
-    Enter  Force summarize
-    ESC/q  Quit
-
-Usage
------
-::
-
-    python run_realtime.py --model=resnet
-    python ResnetPatchCore/predict_camera.py
+Realtime Pill Inspection — ใช้ DatasetManager สำหรับ save crops
+================================================================
 """
 import sys
 from pathlib import Path
-
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import cv2
 import json
 import numpy as np
 from datetime import datetime
-
 from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
 from Core_ResnetPatchCore.pipeline.visualizer import (
     draw_summary, put_text_top_left, put_text_top_right,
     COLOR_ANOMALY, COLOR_BLACK,
 )
-
+from Core_ResnetPatchCore.utils.structure_manager import DatasetManager  # ✅ เพิ่ม import
 from config.base import (
     SAVE_DIR,
     COMPARE_CLASSES,
@@ -81,52 +33,65 @@ from config.resnet import (
 
 # ─────────────────── helpers ───────────────────
 def save_crops(crops: dict, out_dir: Path) -> int:
+    """✅ ใช้ DatasetManager สำหรับ save crops"""
     if not crops:
         return 0
-    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ✅ สร้าง folder ผ่าน DatasetManager
+    mgr = DatasetManager(root=out_dir, auto_create=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     for tid, crop in crops.items():
-        cv2.imwrite(str(out_dir / f"crop_{ts}_id{tid}.jpg"), crop)
+        # สร้าง folder ย่อยตาม track_id
+        mgr.create("crops", f"track_{tid}", structure="nested", with_splits=False)
+        cp = mgr.get_class_path("crops", f"track_{tid}")
+        cv2.imwrite(str(cp.path / f"crop_{ts}.jpg"), crop)
+
     return len(crops)
 
 
 def build_crop_grid(crops: dict, cell_size: int = 128, max_cols: int = 5) -> "np.ndarray | None":
-    """Build a visual grid of crop images (what enters PatchCore) for preview."""
+    """Build a visual grid of crop images."""
     if not crops:
         return None
+
     items = list(crops.items())
     n = len(items)
     cols = min(n, max_cols)
     rows = (n + cols - 1) // cols
     label_h = 20
+
     grid = np.zeros((rows * (cell_size + label_h), cols * cell_size, 3), dtype=np.uint8)
+
     for idx, (tid, img) in enumerate(items):
         row = idx // cols
         col = idx % cols
         y = row * (cell_size + label_h)
         x = col * cell_size
+
         cell = img[:, :, :3] if img.ndim == 3 and img.shape[2] == 4 else img
         cell = cv2.resize(cell, (cell_size, cell_size), interpolation=cv2.INTER_LANCZOS4)
         grid[y + label_h:y + label_h + cell_size, x:x + cell_size] = cell
         cv2.putText(grid, f"ID:{tid}", (x + 4, y + 14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+
     return grid
 
 
 def print_frame_scores(results: list, thresholds: dict) -> None:
-    """Print per-pill console output matching the spec."""
+    """Print per-pill console output."""
     if not results:
         return
+
     print("-" * 60)
     for r in results:
         tid = r.get("id", -1)
         status = r.get("status", "UNKNOWN")
         scores = r.get("class_scores", {})
         normal_from = r.get("normal_from", [])
-
         mark = "✓" if status == "NORMAL" else "✗"
-        print(f"[ID:{tid}] {mark} {status}")
 
+        print(f"[ID:{tid}] {mark} {status}")
         for cls, score in scores.items():
             thr = thresholds.get(cls, 0.50)
             if score <= thr:
@@ -136,6 +101,7 @@ def print_frame_scores(results: list, thresholds: dict) -> None:
 
         if normal_from:
             print(f"    Normal from: {', '.join(normal_from)}")
+
     print("-" * 60)
 
 
@@ -156,17 +122,14 @@ def draw_overlay(
 def digital_zoom(frame, zoom=1.5):
     if zoom <= 1:
         return frame
-
     h, w = frame.shape[:2]
-
     new_w = int(w / zoom)
     new_h = int(h / zoom)
-
     x1 = (w - new_w) // 2
     y1 = (h - new_h) // 2
-
     cropped = frame[y1:y1+new_h, x1:x1+new_w]
     return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
 
 # ─────────────────── camera loop ───────────────────
 def run_camera(inspector: PillInspector) -> None:
@@ -194,6 +157,7 @@ def run_camera(inspector: PillInspector) -> None:
     while True:
         ret, frame = cap.read()
         frame = digital_zoom(frame, zoom=1.5)
+
         if not ret:
             print("Failed to read frame")
             break
@@ -218,27 +182,24 @@ def run_camera(inspector: PillInspector) -> None:
             if result["image"] is not None:
                 cv2.imshow(WINDOW_NAME, result["image"])
 
-                # JSON output
-                out = {
-                    "count": result["count"],
-                    "good_count": result["good_count"],
-                    "bad_count": result["bad_count"],
-                    "good_pills": result["good_pills"],
-                    "bad_pills": result["bad_pills"],
-                }
-                print(f"\n{'=' * 50}")
-                # print("SUMMARY:")
-                # print(json.dumps(out, indent=2, ensure_ascii=False))
-                print(f"{'=' * 50}\n")
+            out = {
+                "count": result["count"],
+                "good_count": result["good_count"],
+                "bad_count": result["bad_count"],
+                "good_pills": result["good_pills"],
+                "bad_pills": result["bad_pills"],
+            }
 
-                cv2.waitKey(2000)
+            print(f"\n{'=' * 50}")
+            print(f"{'=' * 50}\n")
 
+            cv2.waitKey(2000)
             inspector.reset()
             frame_count = 0
 
         cv2.imshow(WINDOW_NAME, vis)
 
-        # Show crop preview (pills before PatchCore)
+        # Show crop preview
         crop_grid = build_crop_grid(inspector.last_crops)
         if crop_grid is not None:
             cv2.imshow("Crop Preview", crop_grid)
@@ -257,12 +218,12 @@ def run_camera(inspector: PillInspector) -> None:
             result = inspector.summarize()
             if result["image"] is not None:
                 cv2.imshow(WINDOW_NAME, result["image"])
-                print(json.dumps({
-                    "count": result["count"],
-                    "good_count": result["good_count"],
-                    "bad_count": result["bad_count"],
-                }, indent=2))
-                cv2.waitKey(2000)
+            print(json.dumps({
+                "count": result["count"],
+                "good_count": result["good_count"],
+                "bad_count": result["bad_count"],
+            }, indent=2))
+            cv2.waitKey(2000)
             inspector.reset()
             frame_count = 0
 
@@ -274,11 +235,9 @@ def run_camera(inspector: PillInspector) -> None:
 def main():
     print("Initializing ResNet50 PatchCore Inspector ...")
 
-    # InspectorConfig defaults come from config/base.py + config/resnet.py
     config = InspectorConfig(
         compare_classes=list(COMPARE_CLASSES),
     )
-
     inspector = PillInspector(config)
 
     print("Starting camera ...")

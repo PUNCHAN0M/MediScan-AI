@@ -1,3 +1,4 @@
+#config\resnet.py
 """
 ResNet50 PatchCore Configuration
 ================================

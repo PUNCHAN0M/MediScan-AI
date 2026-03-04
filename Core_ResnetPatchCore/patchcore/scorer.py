@@ -1,3 +1,4 @@
+#Core_ResnetPatchCore\patchcore\scorer.py
 """
 PatchCore Scorer
 ================

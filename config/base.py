@@ -1,3 +1,4 @@
+#config\base.py
 """
 Base Configuration for MediScan-AI
 ==================================
@@ -76,7 +77,7 @@ SELECTED_CLASSES: list[str] = ["Androxsil"]          # ว่าง = train ท�
 #                          PREDICTION
 # =============================================================================
 COMPARE_CLASSES = [
-    # "Androxsil",
+    "Androxsil",
     # "ANTA1mg",
     # "Baclofen",
     # "Bestatin20",
@@ -98,7 +99,7 @@ COMPARE_CLASSES = [
     # "LOSARTAN_POTASSIUM50mg",
     # "NOXA20",
     # "panadol",
-    "paracap",
+    # "paracap",
     # "pink_circle",
     # "Pregabalin25mg",
     # "Quetiepine25mg",
