@@ -12,7 +12,7 @@ from ultralytics import YOLO
 
 def export_onnx(
     model_path: str = "model/pill-detection-best.pt",
-    imgsz: int = 640,
+    imgsz: int = 1280,
     half: bool = False,
     simplify: bool = True,
     opset: int = 17,
@@ -41,7 +41,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export YOLO .pt → .onnx")
     parser.add_argument("--model", default="model/pill-detection-best.pt",
                         help="Path to .pt model")
-    parser.add_argument("--imgsz", type=int, default=640,
+    parser.add_argument("--imgsz", type=int, default=1280,
                         help="Default image size for export shape")
     parser.add_argument("--half", action="store_true",
                         help="Export FP16 (requires GPU)")

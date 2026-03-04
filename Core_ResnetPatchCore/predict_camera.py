@@ -167,6 +167,7 @@ def digital_zoom(frame, zoom=1.5):
 
     cropped = frame[y1:y1+new_h, x1:x1+new_w]
     return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
 # ─────────────────── camera loop ───────────────────
 def run_camera(inspector: PillInspector) -> None:
     cap = cv2.VideoCapture(CAMERA_INDEX)
