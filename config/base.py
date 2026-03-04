@@ -25,7 +25,7 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 #                              PATHS
 # =============================================================================
 DATA_ROOT            = Path(r"D:\project\Medicine-AI\MediScan-AI\data_train_defection")
-BAD_DIR              = "data_yolo/calibrate-bad/"
+BAD_DIR              = "data_bad/"
 SAVE_DIR             = Path("./data/inspected")
 MODEL_OUTPUT_DIR     = Path("./model/patchcore_resnet")
 
@@ -69,7 +69,7 @@ TRACK_MAX_AGE            = 10
 #                          TRAINING
 # =============================================================================
 SEED                     = 42
-SELECTED_CLASSES: list[str] = []          # ว่าง = train ทุก class
+SELECTED_CLASSES: list[str] = ["Androxsil"]          # ว่าง = train ทุก class
 
 
 # =============================================================================

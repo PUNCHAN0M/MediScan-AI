@@ -87,3 +87,5 @@ data_scrap_resize_backup
 data_train_defection
 data_backbone_augment
 data_backbone_augment_backup
+data_bad
+databad

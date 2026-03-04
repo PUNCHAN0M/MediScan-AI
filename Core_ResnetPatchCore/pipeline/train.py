@@ -86,6 +86,16 @@ class TrainPipeline:
             if p.is_file() and p.suffix.lower() in cls.IMAGE_EXTS
         )
 
+    @classmethod
+    def list_images_recursive(cls, directory: Path) -> List[Path]:
+        """List image files recursively through all subdirectories."""
+        if not directory.is_dir():
+            return []
+        return sorted(
+            p for p in directory.rglob("*")
+            if p.is_file() and p.suffix.lower() in cls.IMAGE_EXTS
+        )
+
     # ─────────────────── train one class ───────────────────
     def train_class(
         self,
@@ -169,14 +179,18 @@ class TrainPipeline:
     ) -> float:
         """
         Calibrate using BAD_DIR only (no good images).
+        Scans data_bad/{mainclass}/{subclass}/ recursively
+        and collects all images into one flat list.
         """
 
         from config.base import BAD_DIR
 
         bad_dir = Path(BAD_DIR)
-        bad_paths = self.list_images(bad_dir)
+        bad_paths = self.list_images_recursive(bad_dir)
 
-        if not bad_paths:
+        if bad_paths:
+            print(f"    [Calibrate] Found {len(bad_paths)} BAD images from {bad_dir}")
+        else:
             print("    [Calibrate] No BAD images → fallback")
             return self.fallback_threshold
 
