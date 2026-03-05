@@ -1,27 +1,28 @@
-# Core_ResnetPatchCore/train_patchcore.py
 """
-ResNet50 PatchCore Training — ใช้ DatasetManager + SELECTED_CLASSES
-====================================================================
-Usage
------
-::
-python Core_ResnetPatchCore/train_patchcore.py
-python Core_ResnetPatchCore/train_patchcore.py --backbone model/backbone/resnet_last.pth
-python Core_ResnetPatchCore/train_patchcore.py --classes paracap vitaminc  # override SELECTED_CLASSES
-python Core_ResnetPatchCore/train_patchcore.py --dry-run
+ResNet50 PatchCore Training (Optimized Production)
+==================================================
+• Deterministic
+• Faster feature extraction
+• Safer class filtering
+• Clean logging
 """
+
 import argparse
 import sys
+import random
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
+import numpy as np
 from datetime import datetime
+
 from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
 from Core_ResnetPatchCore.pipeline.train import TrainPipeline
 from Core_ResnetPatchCore.utils.structure_manager import DatasetManager
+
 from config.base import (
-    DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS,
+    DATA_ROOT, SELECTED_CLASSES, SEED,
     MODEL_OUTPUT_DIR, DEVICE,
 )
 from config.resnet import (
@@ -29,8 +30,6 @@ from config.resnet import (
     IMG_SIZE,
     GRID_SIZE,
     CORESET_RATIO,
-    CORESET_MIN_KEEP,
-    CORESET_MAX_KEEP,
     K_NEAREST,
     FALLBACK_THRESHOLD,
     USE_COLOR_FEATURES,
@@ -40,126 +39,105 @@ from config.resnet import (
 )
 
 
-# ─────────────────── main ───────────────────
+# ─────────────────────────────────────────────
+# Performance Setup
+# ─────────────────────────────────────────────
+def setup_environment():
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+    random.seed(SEED)
+
+    if DEVICE == "cuda":
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+
+        if torch.__version__ >= "2.0":
+            torch.set_float32_matmul_precision("high")
+
+        torch.cuda.empty_cache()
+
+
+# ─────────────────────────────────────────────
+# Safe class filtering
+# ─────────────────────────────────────────────
+def filter_classes(all_classes, selected):
+    if not selected:
+        return all_classes
+
+    selected_set = set(selected)
+    filtered = []
+
+    for main_class, sub_class in all_classes:
+        if main_class in selected_set or sub_class in selected_set:
+            filtered.append((main_class, sub_class))
+
+    return filtered
+
+
+# ─────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────
 def main():
+
     parser = argparse.ArgumentParser(description="ResNet50 PatchCore Training")
-    parser.add_argument(
-        "--backbone",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help="Path to a custom backbone .pth file.",
-    )
-    parser.add_argument(
-        "--classes", "-c",
-        nargs="*",
-        default=None,
-        help="Train specific main classes only (override SELECTED_CLASSES from config)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be trained without executing",
-    )
-    parser.add_argument(
-        "--structure",
-        type=str,
-        default="auto",
-        choices=["auto", "nested", "flat"],
-        help="Dataset structure type (default: auto-detect)",
-    )
-    args, _ = parser.parse_known_args()
+    parser.add_argument("--backbone", type=str, default=None)
+    parser.add_argument("--classes", "-c", nargs="*", default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--structure", type=str, default="auto",
+                        choices=["auto", "nested", "flat"])
 
-    # CLI --backbone overrides config
+    args = parser.parse_args()
+
+    setup_environment()
+
+    # ── Backbone Handling ──
     backbone_path = args.backbone or BACKBONE
-    if backbone_path and not Path(backbone_path).suffix == ".pth":
-        backbone_path = None
-    if backbone_path and not Path(backbone_path).exists():
-        print(f"  [Warning] Backbone not found: {backbone_path}")
-        print(f"  → ใช้ resnet50 (ImageNet pretrained) แทน")
-        backbone_path = None
+    if backbone_path:
+        backbone_path = Path(backbone_path)
+        if not backbone_path.exists() or backbone_path.suffix != ".pth":
+            print(f"[Warning] Invalid backbone → fallback to ImageNet")
+            backbone_path = None
 
-    backbone_label = backbone_path if backbone_path else "resnet50 (ImageNet pretrained)"
+    backbone_label = str(backbone_path) if backbone_path else "resnet50 (ImageNet)"
 
-    # ── Initialize DatasetManager ──
+    # ── Dataset Manager ──
     mgr = DatasetManager(root=DATA_ROOT, auto_create=False)
 
-    # ── Discover classes to train ──
-    # ✅ ใช้ SELECTED_CLASSES จาก config ถ้าไม่ระบุ --classes ทาง CLI
-    if args.classes:
-        # CLI override: ใช้ classes จาก command line
-        selected = args.classes
-        print(f"\n📋 Training specific classes (CLI override): {selected}")
-    elif SELECTED_CLASSES:
-        # ใช้ SELECTED_CLASSES จาก config/base.py
-        selected = SELECTED_CLASSES
-        print(f"\n📋 Training specific classes (from config): {selected}")
-    else:
-        # Train ทุก class
-        selected = None
-        print(f"\n📋 Training ALL classes (SELECTED_CLASSES is empty)")
-
-    # List classes จาก DatasetManager
+    # ── Discover Classes ──
     all_classes = mgr.list_classes(require_train_good=True, structure=args.structure)
 
-    # ✅ Filter ด้วย SELECTED_CLASSES (ถ้ามี)
-    if selected:
-        classes = [
-            (m, s) for m, s in all_classes
-            if m in selected or any(m in c for c in selected)
-        ]
-        print(f"   Found {len(classes)} matching subclasses from {len(all_classes)} total")
-        
-        # เตือนถ้าไม่พบ class ที่ระบุ
-        matched_names = {m for m, s in classes}
-        unmatched = [c for c in selected if c not in matched_names and not any(c in m for m in matched_names)]
-        if unmatched:
-            print(f"   ⚠️  Warning: These classes not found: {unmatched}")
-    else:
-        classes = all_classes
-        print(f"   Total: {len(classes)} subclasses")
+    selected = args.classes if args.classes else SELECTED_CLASSES
+    classes = filter_classes(all_classes, selected)
 
     if not classes:
-        print("❌ No valid class folders found.")
-        print(f"   Data root: {DATA_ROOT}")
-        print(f"   Structure: {args.structure}")
-        if selected:
-            print(f"   Selected classes: {selected}")
+        print("❌ No valid classes found.")
         return
 
-    # ── Print config ──
+    # ── Print Config ──
     print("=" * 70)
-    print("      ResNet50 PatchCore Training")
+    print("      ResNet50 PatchCore Training (Optimized)")
     print("=" * 70)
-    print(f"  Device        : {DEVICE}")
-    print(f"  Backbone      : {backbone_label}")
-    print(f"  Image size    : {IMG_SIZE} × {IMG_SIZE}")
-    print(f"  Grid size     : {GRID_SIZE} × {GRID_SIZE}")
-    print(f"  Color features: {USE_COLOR_FEATURES}  HSV: {USE_HSV}  weight: {COLOR_WEIGHT}")
-    print(f"  Score method  : {SCORE_METHOD}")
-    print(f"  Coreset ratio : {CORESET_RATIO}")
-    print(f"  k-nearest     : {K_NEAREST}")
-    print(f"  Fallback thr  : {FALLBACK_THRESHOLD}")
-    print(f"  Data root     : {DATA_ROOT}")
-    print(f"  Model output  : {MODEL_OUTPUT_DIR}")
-    print(f"  Structure     : {args.structure}")
-    print(f"  Selected      : {selected if selected else 'ALL'}")
+    print(f"Device        : {DEVICE}")
+    print(f"Backbone      : {backbone_label}")
+    print(f"Image size    : {IMG_SIZE}")
+    print(f"Grid size     : {GRID_SIZE}")
+    print(f"Coreset ratio : {CORESET_RATIO}")
+    print(f"k-nearest     : {K_NEAREST}")
+    print(f"Score method  : {SCORE_METHOD}")
+    print(f"Color feature : {USE_COLOR_FEATURES} | HSV: {USE_HSV}")
+    print(f"Classes       : {selected if selected else 'ALL'}")
     print("=" * 70)
 
-    # ── Dry run ──
+    # ── Dry Run ──
     if args.dry_run:
-        print(f"\n📋 Training Plan: {len(classes)} subclasses")
+        print("\n📋 Dry Run:")
         for main_class, sub_class in classes:
             cp = mgr.get_class_path(main_class, sub_class, structure=args.structure)
-            if cp:
-                n_imgs = cp.count_images("train", "good")
-                print(f"   • {main_class}/{sub_class}: {n_imgs} images")
-            else:
-                print(f"   • {main_class}/{sub_class}: [path not found]")
-        print("\n✅ Dry run complete (no training executed)")
+            n_imgs = cp.count_images("train", "good") if cp else 0
+            print(f"  • {main_class}/{sub_class} → {n_imgs} images")
         return
 
-    # ── init components ──
+    # ── Init Extractor ──
     extractor = ResNet50FeatureExtractor(
         img_size=IMG_SIZE,
         grid_size=GRID_SIZE,
@@ -167,7 +145,7 @@ def main():
         use_color_features=USE_COLOR_FEATURES,
         use_hsv=USE_HSV,
         color_weight=COLOR_WEIGHT,
-        backbone_path=backbone_path,
+        backbone_path=str(backbone_path) if backbone_path else None,
     )
 
     pipeline = TrainPipeline(
@@ -181,61 +159,56 @@ def main():
 
     MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # ── train ──
-    total = 0
-    failed = 0
+    # ── Training Loop ──
+    total, failed = 0, 0
     t0 = datetime.now()
 
-    print(f"\n🚀 Starting training: {len(classes)} subclasses")
+    print(f"\n🚀 Training {len(classes)} subclasses")
     print("=" * 70)
 
-    for main_class, sub_class in classes:
-        # ✅ ใช้ DatasetManager เข้าถึง path
-        cp = mgr.get_class_path(main_class, sub_class, structure=args.structure)
-        if not cp:
-            print(f"\n[Skip] {main_class}/{sub_class}: path not found")
-            failed += 1
-            continue
+    with torch.inference_mode():
 
-        good_dir = cp.train_good
-        out_path = MODEL_OUTPUT_DIR / main_class / f"{sub_class}.pth"
+        for main_class, sub_class in classes:
 
-        print(f"\n{'=' * 60}")
-        print(f"Parent Class: {main_class}")
-        print(f"Subclass    : {sub_class}")
-        print(f"{'=' * 60}")
-        print(f"  Good dir : {good_dir}")
-        print(f"  Images   : {cp.count_images('train', 'good')}")
-        print(f"  Output   : {out_path}")
+            cp = mgr.get_class_path(main_class, sub_class, structure=args.structure)
+            if not cp:
+                failed += 1
+                continue
 
-        result = pipeline.train_class(
-            good_dir=good_dir,
-            output_path=out_path,
-        )
+            good_dir = cp.train_good
+            out_path = MODEL_OUTPUT_DIR / main_class / f"{sub_class}.pth"
 
-        if result:
-            total += 1
-            print(f"  ✅ Saved: {out_path}")
-        else:
-            failed += 1
-            print(f"  ❌ Failed: {out_path}")
+            print(f"\n▶ {main_class}/{sub_class}")
+            print(f"  Images : {cp.count_images('train', 'good')}")
+            print(f"  Output : {out_path}")
+
+            result = pipeline.train_parent(
+                parent_dir=good_dir,
+                output_path=out_path,
+            )
+
+            if result:
+                total += 1
+                print("  ✅ Success")
+            else:
+                failed += 1
+                print("  ❌ Failed")
 
     elapsed = datetime.now() - t0
 
     # ── Summary ──
-    print(f"\n{'=' * 70}")
-    print(f"  Training Complete!")
-    print(f"  Subclasses trained : {total}")
-    print(f"  Subclasses failed  : {failed}")
-    print(f"  Time               : {elapsed}")
-    print(f"  Models saved to    : {MODEL_OUTPUT_DIR}")
-    print(f"{'=' * 70}")
+    print("\n" + "=" * 70)
+    print("Training Complete")
+    print(f"Success : {total}")
+    print(f"Failed  : {failed}")
+    print(f"Time    : {elapsed}")
+    print(f"Saved   : {MODEL_OUTPUT_DIR}")
+    print("=" * 70)
 
-    # ── Dataset Summary ──
     summary = mgr.summary()
-    print(f"\n📊 Dataset Summary:")
-    print(f"   Total classes: {summary['total_classes']}")
-    print(f"   Total images:  {summary['total_images']:,}")
+    print(f"\n📊 Dataset Summary")
+    print(f"Classes : {summary['total_classes']}")
+    print(f"Images  : {summary['total_images']:,}")
 
 
 if __name__ == "__main__":

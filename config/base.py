@@ -70,7 +70,8 @@ TRACK_MAX_AGE            = 10
 #                          TRAINING
 # =============================================================================
 SEED                     = 42
-SELECTED_CLASSES: list[str] = ["Androxsil",
+SELECTED_CLASSES: list[str] = [
+    # "Androxsil",
     # "ANTA1mg", 
       ]          # ว่าง = train ทุก class
 
@@ -79,7 +80,7 @@ SELECTED_CLASSES: list[str] = ["Androxsil",
 #                          PREDICTION
 # =============================================================================
 COMPARE_CLASSES = [
-    "Androxsil",
+    # "Androxsil",
     # "ANTA1mg",
     # "Baclofen",
     # "Bestatin20",
