@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#run_finetune_backbone.py
 """
 Fine-tune ResNet50 Backbone on Custom Dataset
 ==============================================
