@@ -8,6 +8,9 @@ import sys
 import os
 from pathlib import Path
 
+# Suppress OpenCV DSHOW warnings
+os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+
 # Ensure project root is on sys.path
 ROOT = Path(__file__).resolve().parent
 os.chdir(ROOT)

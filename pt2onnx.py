@@ -3,7 +3,7 @@ Export YOLO .pt → .onnx with dynamic image size + optimizations.
 
 Usage:
     python pt2onnx.py                          # ใช้ค่า default
-    python pt2onnx.py --model model/yolo12-seg.pt --imgsz 640 --half
+    python pt2onnx.py --model weights/yolo12-seg.pt --imgsz 640 --half
 """
 import argparse
 from pathlib import Path
@@ -11,7 +11,7 @@ from ultralytics import YOLO
 
 
 def export_onnx(
-    model_path: str = "model/pill-detection-best.pt",
+    model_path: str = "weights/pill-detection-best.pt",
     imgsz: int = 1280,
     half: bool = False,
     simplify: bool = True,
@@ -39,7 +39,7 @@ def export_onnx(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export YOLO .pt → .onnx")
-    parser.add_argument("--model", default="model/pill-detection-best.pt",
+    parser.add_argument("--model", default="weights/pill-detection-best.pt",
                         help="Path to .pt model")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Default image size for export shape")

@@ -29,9 +29,9 @@ from PIL import Image
 from typing import Dict, List, Optional, Tuple
 
 from core.utils import list_images_recursive
-from models.feature_extractor import ResNet50FeatureExtractor
-from models.memory_bank import MemoryBank
-from models.scorer import PatchCoreScorer
+from modules.feature_extractor import ResNet50FeatureExtractor
+from modules.memory_bank import MemoryBank
+from modules.scorer import PatchCoreScorer
 
 
 class TrainPipeline:

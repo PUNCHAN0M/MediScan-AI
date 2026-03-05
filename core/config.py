@@ -21,9 +21,9 @@ class PathConfig:
     data_root: Path            = Path("./data_train_defection")
     bad_dir: str               = "data_bad/"
     save_dir: Path             = Path("./data/inspected")
-    model_output_dir: Path     = Path("./model/patchcore_resnet")
-    segmentation_model: str    = "model/detection/pill-detection-best-1.onnx"
-    backbone: str              = "model/backbone/resnet_last.pth"
+    model_output_dir: Path     = Path("./weights/patchcore_resnet")
+    segmentation_model: str    = "weights/detection/pill-detection-best-1.onnx"
+    backbone: str              = "weights/backbone/resnet_last.pth"
 
 
 @dataclass(frozen=True)
@@ -36,8 +36,8 @@ class ImageConfig:
 @dataclass(frozen=True)
 class YOLOConfig:
     """YOLO detection / segmentation settings."""
-    img_size: int              = 640
-    conf: float                = 0.5
+    img_size: int              = 1280
+    conf: float                = 0.25
     iou: float                 = 0.6
     pad: int                   = 0
 

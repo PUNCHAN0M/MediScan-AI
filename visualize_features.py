@@ -7,7 +7,7 @@ import torch
 from sklearn.decomposition import PCA
 import umap
 from sklearn.metrics.pairwise import cosine_similarity
-from models.feature_extractor import ResNet50FeatureExtractor
+from modules.feature_extractor import ResNet50FeatureExtractor
 from matplotlib.lines import Line2D
 
 def main():
@@ -54,8 +54,8 @@ def main():
     # 🧠 BACKBONES
     # =============================
     BACKBONE_CONFIG = {
-        "FineTuned_before": 'model/backbone/resnet_backbone_20260302_160330.pth',
-        # "FineTuned_after": "model/backbone/resnet_backbone_20260227_152310.pth",
+        "FineTuned_before": 'weights/backbone/resnet_backbone_20260302_160330.pth',
+        # "FineTuned_after": "weights/backbone/resnet_backbone_20260227_152310.pth",
     }
 
     extractors = {}

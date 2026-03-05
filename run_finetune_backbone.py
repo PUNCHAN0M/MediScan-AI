@@ -15,7 +15,7 @@ Dataset format expected:
         └── image2.jpg
 
 Output:
-    model/backbone/resnet_backbone_{timestamp}.pth
+    weights/backbone/resnet_backbone_{timestamp}.pth
 
 Usage:
     python run_finetune_backbone.py
@@ -47,7 +47,7 @@ from PIL import Image
 # =============================================================================
 
 DEFAULT_DATA_DIR   = Path("data_train_backbone/")
-DEFAULT_OUTPUT_DIR = Path("model/backbone/")          # ✅ เปลี่ยนเป็นโฟลเดอร์แทนไฟล์
+DEFAULT_OUTPUT_DIR = Path("weights/backbone/")          # ✅ เปลี่ยนเป็นโฟลเดอร์แทนไฟล์
 DEFAULT_EPOCHS     = 20                      # ✅ ปรับค่า default ให้เหมาะสม
 DEFAULT_WARMUP     = 5
 DEFAULT_LR         = 1e-4
@@ -455,7 +455,7 @@ def save_backbone(model: nn.Module, output_dir: Path, model_name: str, meta: dic
     Save fine-tuned backbone + metadata.
     
     ✅ Auto-generate filename based on model_name + timestamp
-    Format: model/backbone/{model_name}_backbone_{timestamp}.pth
+    Format: weights/backbone/{model_name}_backbone_{timestamp}.pth
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     

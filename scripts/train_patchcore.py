@@ -18,7 +18,7 @@ from pathlib import Path
 
 from core.config import Config
 from core.device import get_device, setup_cuda, setup_seed
-from models.feature_extractor import ResNet50FeatureExtractor
+from modules.feature_extractor import ResNet50FeatureExtractor
 from pipeline.train_pipeline import TrainPipeline
 from core.utils import list_images_recursive
 

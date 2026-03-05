@@ -1,82 +1,80 @@
 """
-Page: Classifier — Realtime pill defect detection
-==================================================
-Left  : camera feed with bounding-box / centre overlay + segmented pills
-Right : count info, START/STOP toggle, BBOX/CENTER toggle,
-        class scroller, selected-classes panel
+Page: Verify — Realtime pill defect verification
+=================================================
+Layout
+------
+Left  : camera feed  →  Normal / Defect pill strips
+Right : Camera dropdown, START / BBOX|CENTER toggle,
+        Count / Normal / Defect info,
+        Class selector with search + selected panel + Apply
 
-Architecture:
-    QTimer (main/Qt thread): cap.read() → YOLO detect (sync, fast ~20-50 ms)
-                             → draw current bboxes + cached labels → pixmap
-    Background thread      : feature extraction + scoring (async, ~100-500 ms)
-                             → updates {track_id: status} map
-
-Benefits:
-    - Bboxes appear/disappear INSTANTLY with YOLO detections.
-    - Labels (NORMAL/ANOMALY) update once scoring finishes.
-    - Covering a pill → YOLO stops detecting → bbox gone immediately.
-    - No stale bboxes, no stutter.
+Architecture
+    QTimer (main thread) : cap.read() → YOLO detect (sync, fast)
+                           → draw bboxes + cached labels → pixmap
+    Background thread    : feature extraction + scoring (async)
+                           → updates {track_id: status} map
 """
 from __future__ import annotations
 
 import cv2
+import os
 import threading
-import time
 import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap, QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
-    QComboBox, QLineEdit, QListWidget, QListWidgetItem,
-    QGroupBox, QFrame, QSplitter, QSizePolicy, QScrollArea,
-    QGridLayout, QMessageBox,
+    QComboBox, QLineEdit, QListWidget,
+    QGroupBox, QSizePolicy, QScrollArea, QMessageBox,
 )
 
 
+# ─────────────────────────────────────────────
+#  Camera enumeration (silent — no DSHOW warning)
+# ─────────────────────────────────────────────
 def _enum_cameras(max_test: int = 5) -> list[int]:
-    """Return indices of available cameras."""
-    available = []
-    for i in range(max_test):
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-        if cap.isOpened():
-            available.append(i)
-            cap.release()
+    """Return indices of available cameras (suppress DSHOW warnings)."""
+    available: list[int] = []
+    # Temporarily suppress OpenCV warnings
+    prev = os.environ.get("OPENCV_LOG_LEVEL", "")
+    os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
+    try:
+        for i in range(max_test):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if cap.isOpened():
+                available.append(i)
+                cap.release()
+    finally:
+        if prev:
+            os.environ["OPENCV_LOG_LEVEL"] = prev
+        else:
+            os.environ.pop("OPENCV_LOG_LEVEL", None)
     return available or [0]
 
 
 # ─────────────────────────────────────────────
-# Async Scoring Worker (background thread)
+#  Async Scoring Worker
 # ─────────────────────────────────────────────
 class _ScoringWorker:
-    """
-    Background thread for feature extraction + anomaly scoring.
-
-    YOLO detection stays in the Qt thread for instant bbox response.
-    Only scoring (slow part) runs here.
-    """
+    """Background thread: feature extraction + anomaly scoring."""
 
     def __init__(self, inspector: Any):
         self._inspector = inspector
-
-        # Input slot (latest-only)
         self._input_lock = threading.Lock()
-        self._input_slot: Optional[tuple] = None   # (crops, infos)
-
-        # Output: per-track scorings
+        self._input_slot: Optional[tuple] = None
         self._result_lock = threading.Lock()
         self._status_map: Dict[int, Dict[str, Any]] = {}
         self._crops_map: Dict[int, np.ndarray] = {}
-
+        self._generation: int = 0
         self._new_input = threading.Event()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
     def submit(self, crops: list, infos: list) -> None:
-        """Submit YOLO detection batch for scoring (replaces pending)."""
         with self._input_lock:
             self._input_slot = (list(crops), list(infos))
         self._new_input.set()
@@ -91,6 +89,11 @@ class _ScoringWorker:
         with self._result_lock:
             return dict(self._crops_map)
 
+    @property
+    def generation(self) -> int:
+        with self._result_lock:
+            return self._generation
+
     def stop(self) -> None:
         self._stop_event.set()
         self._new_input.set()
@@ -102,17 +105,14 @@ class _ScoringWorker:
             self._new_input.clear()
             if self._stop_event.is_set():
                 break
-
             with self._input_lock:
                 data = self._input_slot
                 self._input_slot = None
             if data is None:
                 continue
-
             try:
                 crops, infos = data
                 results = self._inspector.score_pills(crops, infos)
-
                 new_status: Dict[int, Dict[str, Any]] = {}
                 new_crops: Dict[int, np.ndarray] = {}
                 for r, crop in zip(results, crops):
@@ -124,16 +124,19 @@ class _ScoringWorker:
                     }
                     if tid >= 0:
                         new_crops[tid] = crop
-
                 with self._result_lock:
                     self._status_map = new_status
                     self._crops_map = new_crops
+                    self._generation += 1
             except Exception as e:
                 print(f"[ScoringWorker] {e}")
 
 
-class ClassifierPage(QWidget):
-    """Realtime pill anomaly classifier page."""
+# ─────────────────────────────────────────────
+#  Verify Page
+# ─────────────────────────────────────────────
+class VerifyPage(QWidget):
+    """Realtime pill anomaly verification page."""
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -141,21 +144,24 @@ class ClassifierPage(QWidget):
         self._inspector = None
         self._worker: Optional[_ScoringWorker] = None
         self._running = False
-        self._draw_mode = "bbox"   # "bbox" | "center"
+        self._draw_mode = "bbox"
         self._cap = None
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._process_frame)
 
         self._selected_classes: list[str] = []
-        self._applied_classes: list[str] = []   # classes currently loaded in inspector
+        self._applied_classes: list[str] = []
         self._all_classes: list[str] = []
 
-        # ── widget pools (reuse instead of delete/create each frame) ──
-        self._seg_pool: list[QLabel] = []       # segmented pill labels
-        self._normal_pool: list[QLabel] = []    # normal pill labels
-        self._defect_pool: list[QLabel] = []    # defect pill labels
-        self._prev_defect_count: int = -1       # track defect label style changes
+        # Vote accumulator: {track_id: {"normal": N, "anomaly": N}}
+        self._votes: Dict[int, Dict[str, int]] = {}
+        self._last_gen: int = 0
+
+        # Widget pools (reuse instead of delete/create each frame)
+        self._normal_pool: list[QLabel] = []
+        self._defect_pool: list[QLabel] = []
+        self._prev_defect_count: int = -1
 
         self._init_ui()
         self._load_classes()
@@ -172,44 +178,33 @@ class ClassifierPage(QWidget):
         # Camera feed
         self._cam_label = QLabel("Camera Off")
         self._cam_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._cam_label.setStyleSheet("background:#1a1a1a; color:#888; font-size:16px; border:2px solid #444;")
+        self._cam_label.setStyleSheet(
+            "background:#1a1a1a; color:#888; font-size:16px; border:2px solid #444;"
+        )
         self._cam_label.setMinimumSize(480, 360)
-        self._cam_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._cam_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding,
+        )
         left.addWidget(self._cam_label, stretch=3)
-
-        # Segmented pills grid (below camera)
-        seg_label = QLabel("Segmented Pills")
-        seg_label.setStyleSheet("font-weight:bold; font-size:12px; padding:2px;")
-        left.addWidget(seg_label)
-
-        self._pill_scroll = QScrollArea()
-        self._pill_scroll.setWidgetResizable(True)
-        self._pill_scroll.setMinimumHeight(140)
-        self._pill_scroll.setMaximumHeight(180)
-        self._pill_scroll.setStyleSheet("background:#222; border:1px solid #444;")
-
-        self._pill_grid_widget = QWidget()
-        self._pill_grid_layout = QHBoxLayout(self._pill_grid_widget)
-        self._pill_grid_layout.setContentsMargins(4, 4, 4, 4)
-        self._pill_grid_layout.setSpacing(4)
-        self._pill_grid_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self._pill_scroll.setWidget(self._pill_grid_widget)
-        left.addWidget(self._pill_scroll, stretch=0)
 
         # Normal / Defect pill rows
         nd_row = QHBoxLayout()
 
-        # Normal pills (styled like Segmented Pills)
+        # Normal
         normal_col = QVBoxLayout()
         normal_label = QLabel("Normal")
-        normal_label.setStyleSheet("font-weight:bold; font-size:12px; padding:2px; color:#00c853;")
+        normal_label.setStyleSheet(
+            "font-weight:bold; font-size:12px; padding:2px; color:#00c853;"
+        )
         normal_col.addWidget(normal_label)
 
         self._normal_scroll = QScrollArea()
         self._normal_scroll.setWidgetResizable(True)
         self._normal_scroll.setMinimumHeight(100)
         self._normal_scroll.setMaximumHeight(130)
-        self._normal_scroll.setStyleSheet("background:#1b2e1b; border:2px solid #00c853;")
+        self._normal_scroll.setStyleSheet(
+            "background:#1b2e1b; border:2px solid #00c853;"
+        )
         normal_inner = QWidget()
         self._normal_layout = QHBoxLayout(normal_inner)
         self._normal_layout.setContentsMargins(4, 4, 4, 4)
@@ -219,17 +214,21 @@ class ClassifierPage(QWidget):
         normal_col.addWidget(self._normal_scroll)
         nd_row.addLayout(normal_col)
 
-        # Defect pills (styled like Segmented Pills)
+        # Defect
         defect_col = QVBoxLayout()
         defect_label = QLabel("Defect")
-        defect_label.setStyleSheet("font-weight:bold; font-size:12px; padding:2px; color:#ff1744;")
+        defect_label.setStyleSheet(
+            "font-weight:bold; font-size:12px; padding:2px; color:#ff1744;"
+        )
         defect_col.addWidget(defect_label)
 
         self._defect_scroll = QScrollArea()
         self._defect_scroll.setWidgetResizable(True)
         self._defect_scroll.setMinimumHeight(100)
         self._defect_scroll.setMaximumHeight(130)
-        self._defect_scroll.setStyleSheet("background:#2e1b1b; border:2px solid #ff1744;")
+        self._defect_scroll.setStyleSheet(
+            "background:#2e1b1b; border:2px solid #ff1744;"
+        )
         defect_inner = QWidget()
         self._defect_layout = QHBoxLayout(defect_inner)
         self._defect_layout.setContentsMargins(4, 4, 4, 4)
@@ -240,7 +239,6 @@ class ClassifierPage(QWidget):
         nd_row.addLayout(defect_col)
 
         left.addLayout(nd_row)
-
         left_w = QWidget()
         left_w.setLayout(left)
 
@@ -250,7 +248,10 @@ class ClassifierPage(QWidget):
 
         # Camera selector
         cam_group = QGroupBox("Camera")
-        cam_group.setStyleSheet("QGroupBox{font-size:12px; font-weight:bold; border:1px solid #aaa; padding:6px; padding-top:18px;}")
+        cam_group.setStyleSheet(
+            "QGroupBox{font-size:12px; font-weight:bold; "
+            "border:1px solid #aaa; padding:6px; padding-top:18px;}"
+        )
         cam_lay = QVBoxLayout(cam_group)
         self._cam_combo = QComboBox()
         for idx in _enum_cameras():
@@ -260,30 +261,14 @@ class ClassifierPage(QWidget):
         if combo_idx >= 0:
             self._cam_combo.setCurrentIndex(combo_idx)
         cam_lay.addWidget(self._cam_combo)
-        right.addWidget(cam_group)
 
-        # Info box
-        info_box = QGroupBox()
-        info_box.setStyleSheet("QGroupBox{background:#e8e8e8; border:1px solid #aaa; padding:10px;}")
-        info_lay = QVBoxLayout(info_box)
-
-        self._lbl_count  = QLabel("Count : 0")
-        self._lbl_normal = QLabel("Normal : 0")
-        self._lbl_defect = QLabel("Defect : 0")
-        self._lbl_count.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
-        self._lbl_normal.setStyleSheet("font-size:15px; font-weight:bold; color:green; padding:4px 0;")
-        self._lbl_defect.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
-        for lbl in (self._lbl_count, self._lbl_normal, self._lbl_defect):
-            info_lay.addWidget(lbl)
-        right.addWidget(info_box)
-
-        # Toggle buttons row
+        # START / BBOX buttons — below camera dropdown
         btn_row = QHBoxLayout()
-
         self._btn_toggle_cam = QPushButton("START")
         self._btn_toggle_cam.setCheckable(True)
         self._btn_toggle_cam.setStyleSheet(
-            "QPushButton{background:#1976D2; color:white; font-weight:bold; padding:8px 16px; border:2px solid #1565C0; border-radius:4px;}"
+            "QPushButton{background:#1976D2; color:white; font-weight:bold;"
+            " padding:8px 16px; border:2px solid #1565C0; border-radius:4px;}"
             "QPushButton:checked{background:#ff1744; border-color:#d50000;}"
             "QPushButton:hover{opacity:0.9;}"
         )
@@ -292,18 +277,45 @@ class ClassifierPage(QWidget):
         self._btn_toggle_draw = QPushButton("BBOX")
         self._btn_toggle_draw.setCheckable(True)
         self._btn_toggle_draw.setStyleSheet(
-            "QPushButton{background:#555; color:white; font-weight:bold; padding:8px 16px; border:2px solid #333; border-radius:4px;}"
+            "QPushButton{background:#555; color:white; font-weight:bold;"
+            " padding:8px 16px; border:2px solid #333; border-radius:4px;}"
             "QPushButton:checked{background:#2962ff; border-color:#0039cb; color:white;}"
         )
         self._btn_toggle_draw.clicked.connect(self._toggle_draw_mode)
-
         btn_row.addWidget(self._btn_toggle_cam)
         btn_row.addWidget(self._btn_toggle_draw)
-        right.addLayout(btn_row)
+        cam_lay.addLayout(btn_row)
+
+        right.addWidget(cam_group)
+
+        # Info box
+        info_box = QGroupBox()
+        info_box.setStyleSheet(
+            "QGroupBox{background:#e8e8e8; border:1px solid #aaa; padding:10px;}"
+        )
+        info_lay = QVBoxLayout(info_box)
+        self._lbl_count  = QLabel("Count : 0")
+        self._lbl_normal = QLabel("Normal : 0")
+        self._lbl_defect = QLabel("Defect : 0")
+        self._lbl_count.setStyleSheet(
+            "font-size:15px; font-weight:bold; padding:4px 0;"
+        )
+        self._lbl_normal.setStyleSheet(
+            "font-size:15px; font-weight:bold; color:green; padding:4px 0;"
+        )
+        self._lbl_defect.setStyleSheet(
+            "font-size:15px; font-weight:bold; padding:4px 0;"
+        )
+        for lbl in (self._lbl_count, self._lbl_normal, self._lbl_defect):
+            info_lay.addWidget(lbl)
+        right.addWidget(info_box)
 
         # Class selector
         cls_group = QGroupBox("Classes")
-        cls_group.setStyleSheet("QGroupBox{font-size:13px; font-weight:bold; border:1px solid #aaa; padding:8px; padding-top:18px;}")
+        cls_group.setStyleSheet(
+            "QGroupBox{font-size:13px; font-weight:bold; "
+            "border:1px solid #aaa; padding:8px; padding-top:18px;}"
+        )
         cls_lay = QVBoxLayout(cls_group)
 
         self._class_search = QLineEdit()
@@ -312,17 +324,19 @@ class ClassifierPage(QWidget):
         cls_lay.addWidget(self._class_search)
 
         self._class_list = QListWidget()
-        self._class_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+        self._class_list.setSelectionMode(
+            QListWidget.SelectionMode.MultiSelection,
+        )
         self._class_list.itemSelectionChanged.connect(self._on_class_selection)
         cls_lay.addWidget(self._class_list)
-
         right.addWidget(cls_group, stretch=1)
 
         # Selected classes panel
         sel_group = QGroupBox("Selected Classes")
         sel_group.setStyleSheet(
-            "QGroupBox{font-size:12px; font-weight:bold; border:2px solid #FF6A00; background:#fff3e0;"
-            " padding:6px; padding-top:18px;}"
+            "QGroupBox{font-size:12px; font-weight:bold; "
+            "border:2px solid #FF6A00; background:#fff3e0; "
+            "padding:6px; padding-top:18px;}"
         )
         sel_lay = QVBoxLayout(sel_group)
         self._selected_list = QListWidget()
@@ -332,16 +346,16 @@ class ClassifierPage(QWidget):
 
         self._btn_apply = QPushButton("Apply")
         self._btn_apply.setStyleSheet(
-            "QPushButton{background:#FF6A00; color:white; font-weight:bold; padding:6px 12px; border-radius:3px;}"
+            "QPushButton{background:#FF6A00; color:white; font-weight:bold;"
+            " padding:6px 12px; border-radius:3px;}"
             "QPushButton:hover{background:#FF8F00;}"
         )
         self._btn_apply.clicked.connect(self._reload_inspector)
-        self._btn_apply.setVisible(False)  # Hidden until selection changes
+        self._btn_apply.setVisible(False)
         sel_lay.addWidget(self._btn_apply)
-
         right.addWidget(sel_group)
 
-        # Layout
+        # Assemble
         right_widget = QWidget()
         right_widget.setLayout(right)
         right_widget.setFixedWidth(320)
@@ -351,20 +365,13 @@ class ClassifierPage(QWidget):
 
     # ─────────────────── class list ──────────────────────
     def _load_classes(self):
-        """Scan data_train_defection for main class names.
-
-        Each main_class.pth holds all subclasses inside it,
-        so the inspector only needs the parent name.
-        """
         root = Path("data_train_defection")
-        model_dir = Path("model/patchcore_resnet")
+        model_dir = Path("weights/patchcore_resnet")
         self._all_classes = []
         if root.exists():
-            for main_dir in sorted(root.iterdir()):
-                if main_dir.is_dir():
-                    # Only list classes that have a trained model
-                    if (model_dir / f"{main_dir.name}.pth").exists():
-                        self._all_classes.append(main_dir.name)
+            for d in sorted(root.iterdir()):
+                if d.is_dir() and (model_dir / f"{d.name}.pth").exists():
+                    self._all_classes.append(d.name)
         self._populate_class_list(self._all_classes)
 
     def _populate_class_list(self, classes: list[str]):
@@ -384,33 +391,29 @@ class ClassifierPage(QWidget):
         self._selected_list.clear()
         for cls in self._selected_classes:
             self._selected_list.addItem(cls)
-
-        # Show Apply button only if selection differs from applied
         if sorted(self._selected_classes) != sorted(self._applied_classes):
             self._btn_apply.setVisible(True)
         else:
             self._btn_apply.setVisible(False)
 
     def _reload_inspector(self):
-        """Reload PillInspector with currently selected classes."""
-        # Stop existing worker before replacing inspector
         if self._worker is not None:
             self._worker.stop()
             self._worker = None
-
         self._inspector = None
+        self._votes.clear()
+        self._last_gen = 0
         self._load_inspector()
         self._applied_classes = list(self._selected_classes)
         self._btn_apply.setVisible(False)
-
-        # Restart worker if camera is running
         if self._running and self._inspector is not None:
             self._worker = _ScoringWorker(self._inspector)
+        QMessageBox.information(
+            self, "Inspector",
+            f"Reloaded with {len(self._selected_classes)} class(es).",
+        )
 
-        QMessageBox.information(self, "Inspector",
-                                f"Reloaded with {len(self._selected_classes)} class(es).")
-
-    # ─────────────────── camera control ──────────────────
+    # ─────────────────── camera ──────────────────────────
     def _toggle_camera(self, checked: bool):
         if checked:
             self._start()
@@ -420,7 +423,6 @@ class ClassifierPage(QWidget):
             self._btn_toggle_cam.setText("START")
 
     def _toggle_draw_mode(self):
-        """Toggle BBOX / CENTER draw mode using button checked state."""
         if self._btn_toggle_draw.isChecked():
             self._draw_mode = "center"
             self._btn_toggle_draw.setText("CENTER")
@@ -434,6 +436,8 @@ class ClassifierPage(QWidget):
         cam_idx = self._cam_combo.currentData()
         if cam_idx is None:
             cam_idx = self._settings.get("camera_index", 0)
+
+        # Try DSHOW first, fallback to default
         self._cap = cv2.VideoCapture(cam_idx, cv2.CAP_DSHOW)
         if not self._cap.isOpened():
             self._cap = cv2.VideoCapture(cam_idx)
@@ -444,9 +448,7 @@ class ClassifierPage(QWidget):
 
         if self._inspector is None:
             self._load_inspector()
-
-        # Create background scoring worker
-        if self._inspector is not None:
+        if self._inspector is not None and self._applied_classes:
             self._worker = _ScoringWorker(self._inspector)
 
         self._running = True
@@ -455,27 +457,22 @@ class ClassifierPage(QWidget):
     def _stop(self):
         self._timer.stop()
         self._running = False
-
-        # Stop inference thread
         if self._worker is not None:
             self._worker.stop()
             self._worker = None
-
         if self._cap:
             self._cap.release()
             self._cap = None
         self._cam_label.setText("Camera Off")
-
-        # Clear counts
         self._lbl_count.setText("Count : 0")
         self._lbl_normal.setText("Normal : 0")
         self._lbl_defect.setText("Defect : 0")
         self._prev_defect_count = -1
-        self._lbl_defect.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
-
-        # Hide pooled widgets (faster than delete + recreate)
-        for lbl in self._seg_pool:
-            lbl.setVisible(False)
+        self._lbl_defect.setStyleSheet(
+            "font-size:15px; font-weight:bold; padding:4px 0;"
+        )
+        self._votes.clear()
+        self._last_gen = 0
         for lbl in self._normal_pool:
             lbl.setVisible(False)
         for lbl in self._defect_pool:
@@ -483,43 +480,35 @@ class ClassifierPage(QWidget):
 
     # ─────────────────── inspector ───────────────────────
     def _load_inspector(self):
-        """
-        Lazy-load PillInspector using the SAME settings as ``main.py predict``.
-
-        Reads all parameters from ``app_settings.json`` via SettingsManager
-        so that YOLO model, backbone, thresholds, etc. are identical to
-        the CLI pipeline.
-        """
         try:
             from pipeline.infer_pipeline import PillInspector, InspectorConfig
             from core.device import get_device
 
-            classes = self._selected_classes or self._all_classes
-            settings_dict = self._settings.all() if hasattr(self._settings, 'all') else dict(self._settings)
-
-            config = InspectorConfig.from_settings(settings_dict, compare_classes=list(classes))
+            classes = list(self._selected_classes)   # only selected — never all
+            settings_dict = (
+                self._settings.all()
+                if hasattr(self._settings, "all")
+                else dict(self._settings)
+            )
+            config = InspectorConfig.from_settings(
+                settings_dict, compare_classes=list(classes),
+            )
             config.device = get_device()
-
             self._inspector = PillInspector(config)
-            print(f"[ClassifierPage] Inspector loaded: "
-                  f"YOLO={config.yolo_model_path} | "
-                  f"backbone={config.backbone_path} | "
-                  f"img_size={config.img_size} conf={config.conf} iou={config.iou}")
+            print(
+                f"[VerifyPage] Inspector loaded: "
+                f"YOLO={config.yolo_model_path} | "
+                f"backbone={config.backbone_path} | "
+                f"img_size={config.img_size} conf={config.conf} iou={config.iou}"
+            )
         except Exception as e:
-            print(f"[ClassifierPage] Failed to load inspector: {e}")
-            import traceback; traceback.print_exc()
+            print(f"[VerifyPage] Failed to load inspector: {e}")
+            import traceback
+            traceback.print_exc()
             self._inspector = None
 
     # ─────────────────── frame processing ────────────────
     def _process_frame(self):
-        """
-        QTimer callback — runs at ~30 fps.
-
-        YOLO detection is **synchronous** (fast ~20-50 ms) for instant
-        bbox response.  Scoring runs in ``_ScoringWorker`` — labels
-        update once scoring finishes.  Bboxes appear/disappear
-        instantly regardless of scoring latency.
-        """
         if not self._cap or not self._cap.isOpened():
             return
         ok, frame = self._cap.read()
@@ -530,35 +519,59 @@ class ClassifierPage(QWidget):
         normal_count = 0
         defect_count = 0
         display = frame.copy()
-        normal_crops = []
-        defect_crops = []
-        all_crops_list = []
+        normal_crops: list[np.ndarray] = []
+        defect_crops: list[np.ndarray] = []
 
-        if self._inspector is not None and self._worker is not None:
+        if self._inspector is not None:
             try:
-                # Phase 1: synchronous YOLO detection (fast)
                 crops, infos = self._inspector.detect_frame(frame)
+                has_scorer = self._worker is not None and self._applied_classes
 
-                # Submit crops for async scoring (non-blocking)
-                if crops:
+                if has_scorer and crops:
                     self._worker.submit(crops, infos)
 
-                # Merge: current YOLO bboxes + cached scoring labels
-                scored = self._worker.status_map
-                crops_map = self._worker.crops_map
-
-                all_crops_list = list(crops_map.values()) if crops_map else [c for c in crops]
+                scored = self._worker.status_map if has_scorer else {}
+                crops_map = self._worker.crops_map if has_scorer else {}
                 count = len(infos)
+
+                # ── Accumulate votes when new scoring results arrive ──
+                if has_scorer:
+                    gen = self._worker.generation
+                    if gen != self._last_gen:
+                        self._last_gen = gen
+                        for tid, res in scored.items():
+                            st = res["status"]
+                            if tid not in self._votes:
+                                self._votes[tid] = {"normal": 0, "anomaly": 0}
+                            if st == "NORMAL":
+                                self._votes[tid]["normal"] += 1
+                            elif st == "ANOMALY":
+                                self._votes[tid]["anomaly"] += 1
+
+                # Prune votes for track_ids no longer detected
+                active_tids = {info.get("track_id", -1) for info in infos}
+                dead = [t for t in self._votes if t not in active_tids]
+                for t in dead:
+                    del self._votes[t]
 
                 for i, info in enumerate(infos):
                     tid = info.get("track_id", -1)
                     bbox = info.get("bbox", None)
                     center = info.get("center", None)
+                    crop_img = (
+                        crops_map.get(tid)
+                        if crops_map
+                        else (crops[i] if i < len(crops) else None)
+                    )
 
-                    cached = scored.get(tid)
-                    status = cached["status"] if cached else "SCORING"
-
-                    crop_img = crops_map.get(tid) if crops_map else (crops[i] if i < len(crops) else None)
+                    # Determine status by majority vote
+                    v = self._votes.get(tid)
+                    if v and (v["normal"] + v["anomaly"]) > 0:
+                        status = "NORMAL" if v["normal"] >= v["anomaly"] else "ANOMALY"
+                    elif has_scorer:
+                        status = "SCORING"
+                    else:
+                        status = "PENDING"
 
                     if status == "ANOMALY":
                         defect_count += 1
@@ -571,15 +584,15 @@ class ClassifierPage(QWidget):
                         if crop_img is not None:
                             normal_crops.append(crop_img)
                     else:
-                        # SCORING / PENDING — neutral color
                         color = (200, 200, 0)
 
-                    # Draw annotations
                     if self._draw_mode == "bbox" and bbox:
                         x1, y1, x2, y2 = [int(v) for v in bbox]
                         cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(display, status, (x1, y1 - 5),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                        cv2.putText(
+                            display, status, (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
+                        )
                     elif self._draw_mode == "center":
                         if center:
                             cx, cy = int(center[0]), int(center[1])
@@ -591,54 +604,25 @@ class ClassifierPage(QWidget):
                         cv2.circle(display, (cx, cy), 8, color, -1)
                         cv2.circle(display, (cx, cy), 10, (255, 255, 255), 1)
             except Exception as e:
-                print(f"[ClassifierPage] Inference error: {e}")
+                print(f"[VerifyPage] Inference error: {e}")
 
-        # Update labels (text only — style set once, not every frame)
+        # Update info labels
         self._lbl_count.setText(f"Count : {count}")
         self._lbl_normal.setText(f"Normal : {normal_count}")
         self._lbl_defect.setText(f"Defect : {defect_count}")
-
-        # Only update style when defect state actually changes
         if defect_count != self._prev_defect_count:
             self._prev_defect_count = defect_count
             self._lbl_defect.setStyleSheet(
-                f"font-size:15px; font-weight:bold; color:{'red' if defect_count > 0 else '#333'}; padding:4px 0;"
+                f"font-size:15px; font-weight:bold; "
+                f"color:{'red' if defect_count > 0 else '#333'}; padding:4px 0;"
             )
 
-        # Display camera view (our own annotated display)
         self._show_frame(display)
-
-        # Update segmented pill grid & normal/defect rows
-        self._update_pill_grid(all_crops_list)
         self._update_category_pills(normal_crops, defect_crops)
 
-    def _update_pill_grid(self, crops: list):
-        """Show all segmented pills — reuse QLabel widgets from pool."""
-        needed = min(len(crops), 20)
-
-        # Grow pool if needed
-        while len(self._seg_pool) < needed:
-            lbl = QLabel()
-            lbl.setFixedSize(80, 80)
-            lbl.setStyleSheet("border:1px solid #555;")
-            self._pill_grid_layout.addWidget(lbl)
-            self._seg_pool.append(lbl)
-
-        # Update visible labels
-        for i in range(needed):
-            lbl = self._seg_pool[i]
-            lbl.setPixmap(self._cv2pixmap(crops[i], 80))
-            if not lbl.isVisible():
-                lbl.setVisible(True)
-
-        # Hide surplus labels
-        for i in range(needed, len(self._seg_pool)):
-            if self._seg_pool[i].isVisible():
-                self._seg_pool[i].setVisible(False)
-
+    # ─────────────────── pill strips ─────────────────────
     def _update_category_pills(self, normals: list, defects: list):
-        """Update normal/defect pill rows — reuse QLabel widgets from pools."""
-        # ── Normal ──
+        # Normal
         n_needed = min(len(normals), 10)
         while len(self._normal_pool) < n_needed:
             lbl = QLabel()
@@ -654,7 +638,7 @@ class ClassifierPage(QWidget):
             if self._normal_pool[i].isVisible():
                 self._normal_pool[i].setVisible(False)
 
-        # ── Defect ──
+        # Defect
         d_needed = min(len(defects), 10)
         while len(self._defect_pool) < d_needed:
             lbl = QLabel()
@@ -670,18 +654,22 @@ class ClassifierPage(QWidget):
             if self._defect_pool[i].isVisible():
                 self._defect_pool[i].setVisible(False)
 
+    # ─────────────────── helpers ─────────────────────────
     @staticmethod
     def _cv2pixmap(img: np.ndarray, size: int) -> QPixmap:
-        """Convert BGR cv2 image to QPixmap scaled to *size*."""
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.ndim == 3 else img
         h, w = rgb.shape[:2]
         ch = 3 if rgb.ndim == 3 else 1
-        fmt = QImage.Format.Format_RGB888 if ch == 3 else QImage.Format.Format_Grayscale8
+        fmt = (
+            QImage.Format.Format_RGB888
+            if ch == 3
+            else QImage.Format.Format_Grayscale8
+        )
         qimg = QImage(rgb.data, w, h, ch * w, fmt)
         return QPixmap.fromImage(qimg).scaled(
             size, size,
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
 
     def _show_frame(self, frame: np.ndarray):
@@ -696,10 +684,8 @@ class ClassifierPage(QWidget):
         )
         self._cam_label.setPixmap(scaled)
 
-    # ─────────────────── cleanup ─────────────────────────
     def cleanup(self):
         self._stop()
 
     def hideEvent(self, event):
         super().hideEvent(event)
-

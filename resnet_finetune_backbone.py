@@ -14,7 +14,7 @@ Dataset format expected:
         └── image2.jpg
 
 Output:
-    model/backbone/resnet_backbone_{timestamp}.pth
+    weights/backbone/resnet_backbone_{timestamp}.pth
 
 Usage:
     python run_finetune_backbone.py
@@ -43,7 +43,7 @@ from PIL import Image
 #                              DEFAULTS
 # =============================================================================
 DEFAULT_DATA_DIR   = Path("data_train_backbone/")
-DEFAULT_OUTPUT_DIR = Path("model/backbone/")
+DEFAULT_OUTPUT_DIR = Path("weights/backbone/")
 DEFAULT_EPOCHS     = 20
 DEFAULT_WARMUP     = 5
 DEFAULT_LR         = 1e-4

@@ -3,12 +3,12 @@ Export YOLO .pt → .onnx + .engine (TensorRT) with maximum performance optimiza
 
 Usage:
     python pt2onnx.py                          # ใช้ค่า default (FP16, imgsz=1280)
-    python pt2onnx.py --model model/yolo.pt --int8 --calib data/coco8.yaml
+    python pt2onnx.py --model weights/yolo.pt --int8 --calib data/coco8.yaml
     python pt2onnx.py --static                 # ใช้ static shape (เร็วขึ้นแต่ไม่ยืดหยุ่น)
 
 Output:
-    - model/pill-detection-best.onnx   (FP16/INT8, optimized)
-    - model/pill-detection-best.engine (TensorRT, FP16/INT8, max perf)
+    - weights/pill-detection-best.onnx   (FP16/INT8, optimized)
+    - weights/pill-detection-best.engine (TensorRT, FP16/INT8, max perf)
 """
 import argparse
 import time
@@ -111,7 +111,7 @@ def export_tensorrt(
 
 
 def export_both(
-    model_path: str = "model/pill-detection-best-1.pt",
+    model_path: str = "weights/pill-detection-best-1.pt",
     imgsz: int = 640,
     half: bool = True,
     int8: bool = False,
@@ -202,7 +202,7 @@ if __name__ == "__main__":
     # Model paths
     parser.add_argument(
         "--model", 
-        default="model/detection/pill-detection-best-1.pt",
+        default="weights/detection/pill-detection-best-1.pt",
         help="Path to input .pt model"
     )
     parser.add_argument(

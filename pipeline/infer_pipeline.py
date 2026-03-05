@@ -20,9 +20,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from core.config import Config
 from detection.yolo_detector import YOLODetector
-from models.feature_extractor import ResNet50FeatureExtractor
-from models.memory_bank import MemoryBank
-from models.scorer import PatchCoreScorer
+from modules.feature_extractor import ResNet50FeatureExtractor
+from modules.memory_bank import MemoryBank
+from modules.scorer import PatchCoreScorer
 from visualization.visualizer import draw_pill_results, draw_summary
 
 
@@ -33,8 +33,8 @@ from visualization.visualizer import draw_pill_results, draw_summary
 class InspectorConfig:
     """All knobs for PillInspector in one place."""
     compare_classes: List[str]       = field(default_factory=list)
-    model_dir: Path                  = field(default_factory=lambda: Path("./model/patchcore_resnet"))
-    yolo_model_path: str             = "model/detection/pill-detection-best-2.onnx"
+    model_dir: Path                  = field(default_factory=lambda: Path("./weights/patchcore_resnet"))
+    yolo_model_path: str             = "weights/detection/pill-detection-best-2.onnx"
 
     # YOLO
     img_size: int                    = 640
@@ -120,8 +120,8 @@ class InspectorConfig:
 
         return cls(
             compare_classes=compare_classes or [],
-            model_dir=Path(settings.get("model_dir", "./model/patchcore_resnet")),
-            yolo_model_path=str(settings.get("segmentation_model", "model/detection/pill-detection-best-2.onnx")),
+            model_dir=Path(settings.get("model_dir", "./weights/patchcore_resnet")),
+            yolo_model_path=str(settings.get("segmentation_model", "weights/detection/pill-detection-best-2.onnx")),
             img_size=int(settings.get("seg_img_size", 512)),
             conf=float(settings.get("seg_conf", 0.5)),
             iou=float(settings.get("seg_iou", 0.6)),
