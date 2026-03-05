@@ -6,7 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 # ─── Config ───
-SEGMENTATION_MODEL_PATH = "model/SEGMENTATION/pill-detection-best-2.onnx"
+SEGMENTATION_MODEL_PATH = "model/detection/pill-detection-best-2.onnx"
 from mobile_sife_cuda.core_predict.yolo_detector import OnnxYOLOModel, _load_yolo_model
 
 # ─── Configuration ────────────────────────────────────────────────────────

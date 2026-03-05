@@ -34,7 +34,7 @@ class InspectorConfig:
     """All knobs for PillInspector in one place."""
     compare_classes: List[str]       = field(default_factory=list)
     model_dir: Path                  = field(default_factory=lambda: Path("./model/patchcore_resnet"))
-    yolo_model_path: str             = "model/SEGMENTATION/pill-detection-best-2.onnx"
+    yolo_model_path: str             = "model/detection/pill-detection-best-2.onnx"
 
     # YOLO
     img_size: int                    = 512

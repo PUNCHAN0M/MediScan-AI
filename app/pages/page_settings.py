@@ -119,7 +119,7 @@ class SettingsPage(QWidget):
         # Segmentation model
         yolo_lay.addWidget(QLabel("SEGMENTATION_MODEL"), row, 0)
         self._w_seg_model = QComboBox()
-        for m in _scan_models("model/SEGMENTATION", {".pt", ".onnx", ".engine"}):
+        for m in _scan_models("model/detection", {".pt", ".onnx", ".engine"}):
             self._w_seg_model.addItem(m)
         self._widgets["segmentation_model"] = self._w_seg_model
         yolo_lay.addWidget(self._w_seg_model, row, 1)
@@ -154,7 +154,7 @@ class SettingsPage(QWidget):
         row += 1
         yolo_lay.addWidget(QLabel("DETECTION_MODEL"), row, 0)
         self._w_det_model = QComboBox()
-        for m in _scan_models("model/SEGMENTATION", {".pt", ".onnx", ".engine"}):
+        for m in _scan_models("model/detection", {".pt", ".onnx", ".engine"}):
             self._w_det_model.addItem(m)
         self._widgets["detection_model"] = self._w_det_model
         yolo_lay.addWidget(self._w_det_model, row, 1)
@@ -483,8 +483,8 @@ class SettingsPage(QWidget):
                 app.setFont(f)
 
         # YOLO models (store as relative path)
-        s["segmentation_model"] = f"model\\SEGMENTATION\\{self._w_seg_model.currentText()}"
-        s["detection_model"] = f"model\\SEGMENTATION\\{self._w_det_model.currentText()}"
+        s["segmentation_model"] = f"model\\detection\\{self._w_seg_model.currentText()}"
+        s["detection_model"] = f"model\\detection\\{self._w_det_model.currentText()}"
         s["seg_img_size"] = self._w_seg_img.value()
         s["seg_conf"] = self._w_seg_conf.value()
         s["seg_iou"] = self._w_seg_iou.value()

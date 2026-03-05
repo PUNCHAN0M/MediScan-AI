@@ -15,8 +15,8 @@ _SETTINGS_FILE = _ROOT / "app_settings.json"
 # ── defaults (match app_settings.json shipped with the repo) ──
 _DEFAULTS: Dict[str, Any] = {
     "backbone_model": "model\\backbone\\resnet_last.pth",
-    "segmentation_model": "model\\SEGMENTATION\\pill-detection-best-2.onnx",
-    "detection_model": "model\\SEGMENTATION\\pill-detection-best-2.onnx",
+    "segmentation_model": "model\\detection\\pill-detection-best-2.onnx",
+    "detection_model": "model\\detection\\pill-detection-best-2.onnx",
     "seg_conf": 0.5,
     "seg_iou": 0.6,
     "seg_pad": 5,

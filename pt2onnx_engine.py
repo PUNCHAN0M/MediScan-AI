@@ -202,7 +202,7 @@ if __name__ == "__main__":
     # Model paths
     parser.add_argument(
         "--model", 
-        default="model/SEGMENTATION/pill-detection-best-1.pt",
+        default="model/detection/pill-detection-best-1.pt",
         help="Path to input .pt model"
     )
     parser.add_argument(

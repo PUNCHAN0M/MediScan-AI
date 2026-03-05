@@ -196,7 +196,7 @@ class PillCameraWidget(QWidget):
 
             model_path = self._settings.get(
                 "segmentation_model",
-                "model/SEGMENTATION/pill-detection-best-2.onnx",
+                "model/detection/pill-detection-best-2.onnx",
             )
             device = "cuda" if torch.cuda.is_available() else "cpu"
             self._yolo = YOLODetector(

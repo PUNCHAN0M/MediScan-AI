@@ -22,7 +22,7 @@ from detection.yolo_detector import YOLODetector as YOLOTracking
 # =============================================================================
 CONFIG = {
     # Model Path (รองรับ .pt หรือ .onnx)
-    "MODEL_PATH": "model/SEGMENTATION/pill-detection-best-2.onnx",
+    "MODEL_PATH": "model/detection/pill-detection-best-2.onnx",
 
     # Input: None → Real-time (Webcam), Path → Batch Mode
     "INPUT_DIR": None,
