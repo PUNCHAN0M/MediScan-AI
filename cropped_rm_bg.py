@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 from datetime import datetime
 
-# ─── Import จาก project ของคุณ ───
-from config.base import SEGMENTATION_MODEL_PATH
+# ─── Config ───
+SEGMENTATION_MODEL_PATH = "model/SEGMENTATION/pill-detection-best-2.onnx"
 from mobile_sife_cuda.core_predict.yolo_detector import OnnxYOLOModel, _load_yolo_model
 
 # ─── Configuration ────────────────────────────────────────────────────────

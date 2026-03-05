@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
-from Core_ResnetPatchCore.segmentation.yolo_tracking import YOLOTracking
+from detection.yolo_detector import YOLODetector as YOLOTracking
 
 # =============================================================================
 # ⚙️ CONFIGURATION

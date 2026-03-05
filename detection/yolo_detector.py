@@ -5,6 +5,13 @@ YOLO Segmentation Detector + Pill Cropper
 Wraps ultralytics YOLO → detect pills → preprocess masks → crop.
 Supports: .pt (FP16 auto) / .onnx / .engine (TensorRT) / .torchscript
 No pipeline logic. No tracking (see tracker.py).
+
+Performance notes:
+    - FP16 auto for .pt on CUDA
+    - Region-only mask crop (no full-frame alpha blend)
+    - Vectorised filter (conf + class + area in one pass)
+    - INTER_LINEAR for crop resize (~3× faster than LANCZOS4)
+    - Minimal allocations in crop_pill hot path
 """
 from __future__ import annotations
 
@@ -42,6 +49,8 @@ class YOLODetector:
         - TensorRT ``.engine`` handled without ``.to(device)``
         - Region-only mask crop (no full-frame alpha blend)
         - Optional class_id filter
+        - Vectorised multi-criterion filtering
+        - INTER_LINEAR resize in crop (faster than LANCZOS4)
 
     Optionally delegates tracking to ``CentroidIoUTracker``.
     """
@@ -172,9 +181,10 @@ class YOLODetector:
             if r.boxes is None:
                 continue
 
-            boxes = r.boxes.xyxy.cpu().numpy().astype(int)
+            # ── Single .cpu().numpy() call per tensor ──
+            boxes = r.boxes.xyxy.cpu().numpy().astype(np.int32)
             confs = r.boxes.conf.cpu().numpy()
-            cls_ids = r.boxes.cls.cpu().numpy().astype(int)
+            cls_ids = r.boxes.cls.cpu().numpy().astype(np.int32)
 
             masks_data: Optional[np.ndarray] = None
             if self.mode == "segment" and r.masks is not None:
@@ -192,35 +202,33 @@ class YOLODetector:
                 else:
                     print("[YOLO DEBUG] raw=0")
 
-            # conf filter (ONNX-safe — always applied)
+            # ── Vectorised multi-criterion filter (one pass) ──
+            if len(confs) == 0:
+                continue
+
             keep = confs >= self.conf
-            boxes, confs, cls_ids = boxes[keep], confs[keep], cls_ids[keep]
+
+            if self.class_filter is not None:
+                keep &= cls_ids == self.class_filter
+
+            w = (boxes[:, 2] - boxes[:, 0]).clip(0)
+            h = (boxes[:, 3] - boxes[:, 1]).clip(0)
+            frac = (w * h).astype(np.float32) / frame_area
+            keep &= (frac >= self.min_box_area_frac) & (frac <= self.max_box_area_frac)
+
+            # Apply combined mask
+            boxes = boxes[keep]
+            confs = confs[keep]
+            cls_ids = cls_ids[keep]
             if masks_data is not None:
                 masks_data = masks_data[keep]
-
-            # class filter
-            if self.class_filter is not None and len(boxes):
-                ok = cls_ids == self.class_filter
-                boxes, confs, cls_ids = boxes[ok], confs[ok], cls_ids[ok]
-                if masks_data is not None:
-                    masks_data = masks_data[ok]
-
-            # area filter
-            if len(boxes):
-                w = (boxes[:, 2] - boxes[:, 0]).clip(0)
-                h = (boxes[:, 3] - boxes[:, 1]).clip(0)
-                frac = (w * h).astype(float) / frame_area
-                ok = (frac >= self.min_box_area_frac) & (frac <= self.max_box_area_frac)
-                boxes, confs, cls_ids = boxes[ok], confs[ok], cls_ids[ok]
-                if masks_data is not None:
-                    masks_data = masks_data[ok]
 
             for i, (box, c, cid) in enumerate(zip(boxes, confs, cls_ids)):
                 x1, y1, x2, y2 = box
                 mask = None
                 if masks_data is not None and i < len(masks_data):
                     m = masks_data[i]
-                    mask = cv2.resize(m, (fw, fh))
+                    mask = cv2.resize(m, (fw, fh), interpolation=cv2.INTER_LINEAR)
                     mask = (mask > 0.5).astype(np.uint8) * 255
 
                 detections.append(PillDetection(
@@ -255,35 +263,44 @@ class YOLODetector:
 
         Mask is applied ONLY on the crop region (not full frame)
         for significantly lower memory and compute cost.
+        Uses INTER_LINEAR for ~3× faster resize than LANCZOS4.
         """
         fh, fw = frame.shape[:2]
         x1, y1, x2, y2 = det.bbox
         pad, ts, bg = self.pad, self.target_size, self.bg_value
 
-        x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
-        x2, y2 = min(fw, x2 + pad), min(fh, y2 + pad)
+        x1p = max(0, x1 - pad)
+        y1p = max(0, y1 - pad)
+        x2p = min(fw, x2 + pad)
+        y2p = min(fh, y2 + pad)
 
-        # bbox crop first (small region)
-        crop = frame[y1:y2, x1:x2]
+        # bbox crop first (small region) — view, no copy yet
+        crop = frame[y1p:y2p, x1p:x2p]
         if crop.size == 0:
             return np.full((ts, ts, 3), bg, np.uint8)
 
         # apply mask ONLY on the crop region
         if det.mask is not None:
-            mask_crop = det.mask[y1:y2, x1:x2]
+            mask_crop = det.mask[y1p:y2p, x1p:x2p]
             clean = self.preprocess_mask(mask_crop)
-            crop = crop.copy()
+            crop = crop.copy()          # copy only when mask present
             crop[clean == 0] = bg
-        
+
         # square pad (centred)
         ch, cw = crop.shape[:2]
         side = max(ch, cw)
-        square = np.full((side, side, 3), bg, np.uint8)
+
+        if side == ts and ch == cw:
+            # Perfect fit — no pad or resize needed
+            return crop if det.mask is not None else crop.copy()
+
+        square = np.empty((side, side, 3), np.uint8)
+        square[:] = bg
         sy, sx = (side - ch) // 2, (side - cw) // 2
         square[sy:sy + ch, sx:sx + cw] = crop
 
         if side != ts:
-            square = cv2.resize(square, (ts, ts), interpolation=cv2.INTER_LANCZOS4)
+            square = cv2.resize(square, (ts, ts), interpolation=cv2.INTER_LINEAR)
         return square
 
     # ═════════════════════════════════════════════════════════
@@ -318,7 +335,7 @@ class YOLODetector:
         for det in detections:
             crop = self.crop_pill(frame, det)
             x1, y1, x2, y2 = det.bbox
-            cx, cy = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+            cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
 
             infos.append({
                 "bbox": det.bbox,

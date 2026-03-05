@@ -14,9 +14,15 @@ One ``main_class.pth`` holds *separate* memory banks for each subclass.
     }
 
 Re-training a single subclass keeps the others unchanged.
+
+Performance notes:
+    - Image loading via cv2.imread (no PIL roundtrip)
+    - Batch calibration with extract_batch
+    - Explicit del of large intermediates for memory pressure
 """
 from __future__ import annotations
 
+import cv2
 import numpy as np
 from pathlib import Path
 from PIL import Image
@@ -174,9 +180,10 @@ class TrainPipeline:
 
             for p in batch_paths:
                 try:
-                    pil_img = Image.open(p).convert("RGB")
-                    bgr = np.array(pil_img)[:, :, ::-1]  # RGB → BGR
-                    images.append(bgr)
+                    # Direct cv2 load — faster than PIL→numpy→BGR roundtrip
+                    bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
+                    if bgr is not None:
+                        images.append(bgr)
                 except Exception:
                     continue
 
@@ -208,7 +215,7 @@ class TrainPipeline:
         }
 
     # ═══════════════════════════════════════════════════════
-    #  Calibration
+    #  Calibration (batch mode)
     # ═══════════════════════════════════════════════════════
     def _calibrate(self, memory: np.ndarray) -> float:
         if self.bad_dir is None:
@@ -223,15 +230,26 @@ class TrainPipeline:
         scorer = PatchCoreScorer(k_nearest=self.k_nearest, assume_normalized=False)
         scorer.build_index(memory)
 
+        # ── Batch calibration — process in batches instead of one-by-one ──
         scores: List[float] = []
-        for p in bad_paths:
-            try:
-                img = Image.open(p).convert("RGB")
-                patches = self.extractor.extract(img)
+        for i in range(0, len(bad_paths), self.batch_size):
+            batch_paths = bad_paths[i : i + self.batch_size]
+            batch_imgs: List[np.ndarray] = []
+            for p in batch_paths:
+                try:
+                    bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
+                    if bgr is not None:
+                        batch_imgs.append(bgr)
+                except Exception:
+                    continue
+
+            if not batch_imgs:
+                continue
+
+            batch_feats = self.extractor.extract_batch(batch_imgs)
+            for patches in batch_feats:
                 score = scorer.score_pill(patches, method=self.score_method)
                 scores.append(score)
-            except Exception:
-                continue
 
         if not scores:
             return self.fallback_threshold

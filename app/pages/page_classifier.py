@@ -4,12 +4,27 @@ Page: Classifier — Realtime pill defect detection
 Left  : camera feed with bounding-box / centre overlay + segmented pills
 Right : count info, START/STOP toggle, BBOX/CENTER toggle,
         class scroller, selected-classes panel
+
+Architecture:
+    QTimer (main/Qt thread): cap.read() → YOLO detect (sync, fast ~20-50 ms)
+                             → draw current bboxes + cached labels → pixmap
+    Background thread      : feature extraction + scoring (async, ~100-500 ms)
+                             → updates {track_id: status} map
+
+Benefits:
+    - Bboxes appear/disappear INSTANTLY with YOLO detections.
+    - Labels (NORMAL/ANOMALY) update once scoring finishes.
+    - Covering a pill → YOLO stops detecting → bbox gone immediately.
+    - No stale bboxes, no stutter.
 """
 from __future__ import annotations
 
 import cv2
+import threading
+import time
 import numpy as np
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap, QColor, QFont, QPainter, QPen
@@ -32,6 +47,91 @@ def _enum_cameras(max_test: int = 5) -> list[int]:
     return available or [0]
 
 
+# ─────────────────────────────────────────────
+# Async Scoring Worker (background thread)
+# ─────────────────────────────────────────────
+class _ScoringWorker:
+    """
+    Background thread for feature extraction + anomaly scoring.
+
+    YOLO detection stays in the Qt thread for instant bbox response.
+    Only scoring (slow part) runs here.
+    """
+
+    def __init__(self, inspector: Any):
+        self._inspector = inspector
+
+        # Input slot (latest-only)
+        self._input_lock = threading.Lock()
+        self._input_slot: Optional[tuple] = None   # (crops, infos)
+
+        # Output: per-track scorings
+        self._result_lock = threading.Lock()
+        self._status_map: Dict[int, Dict[str, Any]] = {}
+        self._crops_map: Dict[int, np.ndarray] = {}
+
+        self._new_input = threading.Event()
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def submit(self, crops: list, infos: list) -> None:
+        """Submit YOLO detection batch for scoring (replaces pending)."""
+        with self._input_lock:
+            self._input_slot = (list(crops), list(infos))
+        self._new_input.set()
+
+    @property
+    def status_map(self) -> Dict[int, Dict[str, Any]]:
+        with self._result_lock:
+            return dict(self._status_map)
+
+    @property
+    def crops_map(self) -> Dict[int, np.ndarray]:
+        with self._result_lock:
+            return dict(self._crops_map)
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._new_input.set()
+        self._thread.join(timeout=3.0)
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._new_input.wait()
+            self._new_input.clear()
+            if self._stop_event.is_set():
+                break
+
+            with self._input_lock:
+                data = self._input_slot
+                self._input_slot = None
+            if data is None:
+                continue
+
+            try:
+                crops, infos = data
+                results = self._inspector.score_pills(crops, infos)
+
+                new_status: Dict[int, Dict[str, Any]] = {}
+                new_crops: Dict[int, np.ndarray] = {}
+                for r, crop in zip(results, crops):
+                    tid = r["id"]
+                    new_status[tid] = {
+                        "status": r["status"],
+                        "class_scores": r.get("class_scores", {}),
+                        "normal_from": r.get("normal_from", []),
+                    }
+                    if tid >= 0:
+                        new_crops[tid] = crop
+
+                with self._result_lock:
+                    self._status_map = new_status
+                    self._crops_map = new_crops
+            except Exception as e:
+                print(f"[ScoringWorker] {e}")
+
+
 class ClassifierPage(QWidget):
     """Realtime pill anomaly classifier page."""
 
@@ -39,6 +139,7 @@ class ClassifierPage(QWidget):
         super().__init__(parent)
         self._settings = settings
         self._inspector = None
+        self._worker: Optional[_ScoringWorker] = None
         self._running = False
         self._draw_mode = "bbox"   # "bbox" | "center"
         self._cap = None
@@ -241,15 +342,20 @@ class ClassifierPage(QWidget):
 
     # ─────────────────── class list ──────────────────────
     def _load_classes(self):
-        """Scan data_train_defection for class names."""
+        """Scan data_train_defection for main class names.
+
+        Each main_class.pth holds all subclasses inside it,
+        so the inspector only needs the parent name.
+        """
         root = Path("data_train_defection")
+        model_dir = Path("model/patchcore_resnet")
         self._all_classes = []
         if root.exists():
             for main_dir in sorted(root.iterdir()):
                 if main_dir.is_dir():
-                    for sub_dir in sorted(main_dir.iterdir()):
-                        if sub_dir.is_dir():
-                            self._all_classes.append(sub_dir.name)
+                    # Only list classes that have a trained model
+                    if (model_dir / f"{main_dir.name}.pth").exists():
+                        self._all_classes.append(main_dir.name)
         self._populate_class_list(self._all_classes)
 
     def _populate_class_list(self, classes: list[str]):
@@ -278,10 +384,20 @@ class ClassifierPage(QWidget):
 
     def _reload_inspector(self):
         """Reload PillInspector with currently selected classes."""
+        # Stop existing worker before replacing inspector
+        if self._worker is not None:
+            self._worker.stop()
+            self._worker = None
+
         self._inspector = None
         self._load_inspector()
         self._applied_classes = list(self._selected_classes)
         self._btn_apply.setVisible(False)
+
+        # Restart worker if camera is running
+        if self._running and self._inspector is not None:
+            self._worker = _ScoringWorker(self._inspector)
+
         QMessageBox.information(self, "Inspector",
                                 f"Reloaded with {len(self._selected_classes)} class(es).")
 
@@ -320,12 +436,22 @@ class ClassifierPage(QWidget):
         if self._inspector is None:
             self._load_inspector()
 
+        # Create background scoring worker
+        if self._inspector is not None:
+            self._worker = _ScoringWorker(self._inspector)
+
         self._running = True
         self._timer.start()
 
     def _stop(self):
         self._timer.stop()
         self._running = False
+
+        # Stop inference thread
+        if self._worker is not None:
+            self._worker.stop()
+            self._worker = None
+
         if self._cap:
             self._cap.release()
             self._cap = None
@@ -364,9 +490,9 @@ class ClassifierPage(QWidget):
 
     # ─────────────────── inspector ───────────────────────
     def _load_inspector(self):
-        """Lazy-load PillInspector from Core_ResnetPatchCore."""
+        """Lazy-load PillInspector from new pipeline."""
         try:
-            from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
+            from pipeline.infer_pipeline import PillInspector, InspectorConfig
             classes = self._selected_classes or self._all_classes
             config = InspectorConfig(compare_classes=list(classes))
             self._inspector = PillInspector(config)
@@ -376,6 +502,14 @@ class ClassifierPage(QWidget):
 
     # ─────────────────── frame processing ────────────────
     def _process_frame(self):
+        """
+        QTimer callback — runs at ~30 fps.
+
+        YOLO detection is **synchronous** (fast ~20-50 ms) for instant
+        bbox response.  Scoring runs in ``_ScoringWorker`` — labels
+        update once scoring finishes.  Bboxes appear/disappear
+        instantly regardless of scoring latency.
+        """
         if not self._cap or not self._cap.isOpened():
             return
         ok, frame = self._cap.read()
@@ -390,35 +524,47 @@ class ClassifierPage(QWidget):
         defect_crops = []
         all_crops_list = []
 
-        if self._inspector is not None:
+        if self._inspector is not None and self._worker is not None:
             try:
-                self._inspector.reset()
-                _preview = self._inspector.classify_anomaly(frame)
-                results = self._inspector._last_results
-                crops = self._inspector._last_crops  # dict {track_id: crop_img}
+                # Phase 1: synchronous YOLO detection (fast)
+                crops, infos = self._inspector.detect_frame(frame)
 
-                all_crops_list = list((crops or {}).values())
-                count = len(results)
-                for r in results:
-                    status = r.get("status", "UNKNOWN")
-                    bbox = r.get("bbox", None)
-                    center = r.get("center", None)
-                    tid = r.get("id", -1)
+                # Submit crops for async scoring (non-blocking)
+                if crops:
+                    self._worker.submit(crops, infos)
 
-                    crop_img = crops.get(tid) if crops else None
+                # Merge: current YOLO bboxes + cached scoring labels
+                scored = self._worker.status_map
+                crops_map = self._worker.crops_map
+
+                all_crops_list = list(crops_map.values()) if crops_map else [c for c in crops]
+                count = len(infos)
+
+                for i, info in enumerate(infos):
+                    tid = info.get("track_id", -1)
+                    bbox = info.get("bbox", None)
+                    center = info.get("center", None)
+
+                    cached = scored.get(tid)
+                    status = cached["status"] if cached else "SCORING"
+
+                    crop_img = crops_map.get(tid) if crops_map else (crops[i] if i < len(crops) else None)
 
                     if status == "ANOMALY":
                         defect_count += 1
                         color = (0, 0, 255)
                         if crop_img is not None:
                             defect_crops.append(crop_img)
-                    else:
+                    elif status == "NORMAL":
                         normal_count += 1
                         color = (0, 255, 0)
                         if crop_img is not None:
                             normal_crops.append(crop_img)
+                    else:
+                        # SCORING / PENDING — neutral color
+                        color = (200, 200, 0)
 
-                    # Draw annotations on display (NOT on preview)
+                    # Draw annotations
                     if self._draw_mode == "bbox" and bbox:
                         x1, y1, x2, y2 = [int(v) for v in bbox]
                         cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
@@ -434,8 +580,6 @@ class ClassifierPage(QWidget):
                             continue
                         cv2.circle(display, (cx, cy), 8, color, -1)
                         cv2.circle(display, (cx, cy), 10, (255, 255, 255), 1)
-
-                # Do NOT overwrite display with _preview — we draw our own annotations
             except Exception as e:
                 print(f"[ClassifierPage] Inference error: {e}")
 

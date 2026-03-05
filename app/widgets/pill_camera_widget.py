@@ -1,7 +1,7 @@
 """
 PillCameraWidget — Camera feed with YOLO-based pill segmentation
 ================================================================
-Uses ``YOLOTracking`` to detect and segment pills in realtime.
+Uses ``YOLODetector`` to detect and segment pills in realtime.
 Shows annotated camera feed + segmented pill crops below.
 Supports BBOX/CENTER draw mode toggle.
 """
@@ -187,11 +187,11 @@ class PillCameraWidget(QWidget):
     # ── internal ─────────────────────────────────────────
 
     def _load_yolo(self):
-        """Lazy-load YOLOTracking model."""
+        """Lazy-load YOLODetector model."""
         if self._yolo is not None:
             return
         try:
-            from Core_ResnetPatchCore.segmentation.yolo_tracking import YOLOTracking
+            from detection.yolo_detector import YOLODetector
             import torch
 
             model_path = self._settings.get(
@@ -199,7 +199,7 @@ class PillCameraWidget(QWidget):
                 "model/SEGMENTATION/pill-detection-best-2.onnx",
             )
             device = "cuda" if torch.cuda.is_available() else "cpu"
-            self._yolo = YOLOTracking(
+            self._yolo = YOLODetector(
                 model_path=model_path,
                 img_size=self._settings.get("seg_img_size", 512),
                 conf=self._settings.get("seg_conf", 0.5),
@@ -212,7 +212,7 @@ class PillCameraWidget(QWidget):
                 enable_tracking=False,
             )
         except Exception as e:
-            print(f"[PillCameraWidget] Failed to load YOLOTracking: {e}")
+            print(f"[PillCameraWidget] Failed to load YOLODetector: {e}")
             self._yolo = None
 
     def _toggle_camera(self, checked: bool):

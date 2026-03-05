@@ -22,7 +22,7 @@ class PathConfig:
     bad_dir: str               = "data_bad/"
     save_dir: Path             = Path("./data/inspected")
     model_output_dir: Path     = Path("./model/patchcore_resnet")
-    segmentation_model: str    = "model/SEGMENTATION/pill-detection-best-2.onnx"
+    segmentation_model: str    = "model/detection/pill-detection-best-1.onnx"
     backbone: str              = "model/backbone/resnet_last.pth"
 
 
@@ -36,10 +36,10 @@ class ImageConfig:
 @dataclass(frozen=True)
 class YOLOConfig:
     """YOLO detection / segmentation settings."""
-    img_size: int              = 512
+    img_size: int              = 640
     conf: float                = 0.5
     iou: float                 = 0.6
-    pad: int                   = 5
+    pad: int                   = 0
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class TrainConfig:
     """Training global settings."""
     seed: int                  = 42
     batch_size: int            = 32
-    selected_classes: tuple    = ("NOXA20",)
+    selected_classes: tuple    = ()
 
 
 # ─────────────────────────────────────────────────────────

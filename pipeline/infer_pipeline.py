@@ -3,6 +3,12 @@
 Inference Pipeline — realtime pill inspection.
 ================================================
 Layer 4 — the ONLY place with frame loops / state.
+
+Performance notes:
+    - Eager pre-loading of all class indices at init
+    - Shared GPU resources across all FAISS indices
+    - Early-exit subclass scoring (stop once NORMAL found)
+    - Deferred frame copy (only when needed for drawing)
 """
 from __future__ import annotations
 
@@ -61,6 +67,9 @@ class InspectorConfig:
     # pipeline
     frames_before_summary: int       = 3
     device: Optional[str]            = None
+
+    # performance
+    early_exit_normal: bool          = True   # stop scoring once NORMAL found
 
     def __post_init__(self):
         self.model_dir = Path(self.model_dir)
@@ -149,6 +158,10 @@ class PillInspector:
         # parent_class → { subclass_name → threshold }
         self._sub_thresholds: Dict[str, Dict[str, float]] = {}
 
+        # ── Eager pre-load all configured classes ──
+        for class_name in cfg.compare_classes:
+            self._ensure_index(class_name)
+
     def _init_state(self):
         self._votes: Dict[int, Dict[str, Any]] = {}
         self._last_frame: Optional[np.ndarray] = None
@@ -207,6 +220,9 @@ class PillInspector:
         Score pill features against every subclass of every requested
         parent class.  Pill is NORMAL if **any** subclass score ≤ threshold.
 
+        With ``early_exit_normal=True``, stops scoring once NORMAL is found
+        for faster inference (skips remaining subclasses).
+
         Returns
         -------
         status : "NORMAL" | "ANOMALY"
@@ -218,6 +234,7 @@ class PillInspector:
 
         scores: Dict[str, float] = {}
         normal_from: List[str] = []
+        early_exit = self.config.early_exit_normal
 
         for class_name in classes:
             if not self._ensure_index(class_name):
@@ -235,12 +252,67 @@ class PillInspector:
                 scores[key] = score
                 if score <= sub_thresholds.get(sub_name, 0.5):
                     normal_from.append(key)
+                    if early_exit:
+                        # Found normal — skip remaining subclasses
+                        return "NORMAL", scores, normal_from
 
         status = "NORMAL" if normal_from else "ANOMALY"
         return status, scores, normal_from
 
     # ═══════════════════════════════
-    # REALTIME
+    # SPLIT API (for threaded pipelines)
+    # ═══════════════════════════════
+    def detect_frame(
+        self,
+        frame: np.ndarray,
+    ) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
+        """
+        Phase 1 — YOLO detection only (fast, ~20-50 ms after warmup).
+
+        Returns (crops, infos).  Tracking state is updated here.
+        **Call from the display thread** for instant bbox response.
+        """
+        crops, infos = self._segmentor.detect_and_crop(frame)
+        self._last_frame = frame
+        return crops, infos
+
+    def score_pills(
+        self,
+        crops: List[np.ndarray],
+        infos: List[Dict[str, Any]],
+        class_names: Optional[Sequence[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Phase 2 — feature extraction + anomaly scoring (slow).
+
+        Returns a list of result dicts (one per pill).
+        **Call from a background thread** — only touches ``_extractor``
+        and ``_scorer`` (read-only indices), no shared mutable state.
+        """
+        classes = list(class_names or self.config.compare_classes)
+        batch_feats = self._extractor.extract_batch(crops) if crops else []
+
+        results: List[Dict[str, Any]] = []
+        for i, (crop, info) in enumerate(zip(crops, infos)):
+            feats = batch_feats[i] if i < len(batch_feats) else None
+            status, scores, normal_from = self._classify_pill(feats, classes)
+            results.append({
+                "id": int(info.get("track_id", -1)),
+                "bbox": info["bbox"],
+                "conf": info["conf"],
+                "status": status,
+                "class_scores": scores,
+                "normal_from": normal_from,
+            })
+        return results
+
+    def warmup(self) -> None:
+        """Run a dummy YOLO inference to trigger ONNX compilation."""
+        dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+        self._segmentor.detect(dummy)
+
+    # ═══════════════════════════════
+    # REALTIME (combined — kept for backward compat)
     # ═══════════════════════════════
     def classify_anomaly(
         self,
@@ -248,7 +320,6 @@ class PillInspector:
         class_names: Optional[Sequence[str]] = None,
     ) -> np.ndarray:
         classes = list(class_names or self.config.compare_classes)
-        self._last_frame = frame.copy()
 
         crops, infos = self._segmentor.detect_and_crop(frame)
         batch_feats = self._extractor.extract_batch(crops) if crops else []
@@ -274,6 +345,8 @@ class PillInspector:
             if tid >= 0:
                 frame_crops[tid] = crop
 
+        # Defer frame copy to drawing (only copy once)
+        self._last_frame = frame.copy()
         self._last_results = frame_results
         self._last_crops = frame_crops
         return draw_pill_results(self._last_frame, frame_results)

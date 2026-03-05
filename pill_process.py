@@ -6,7 +6,9 @@ import logging
 import traceback
 from pathlib import Path
 from typing import Optional, List, Tuple
-from config.base import SELECTED_CLASSES, SEED
+
+SEED = 42
+SELECTED_CLASSES: list = []  # empty = process all
 
 # =============================================================================
 # ⚙️ CONFIGURATION

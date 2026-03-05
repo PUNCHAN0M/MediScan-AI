@@ -7,7 +7,7 @@ import torch
 from sklearn.decomposition import PCA
 import umap
 from sklearn.metrics.pairwise import cosine_similarity
-from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from models.feature_extractor import ResNet50FeatureExtractor
 from matplotlib.lines import Line2D
 
 def main():

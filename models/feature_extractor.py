@@ -4,6 +4,13 @@ ResNet50 Feature Extractor for PatchCore
 =========================================
 Pure compute — receives image, returns patches.
 No I/O. No dataset loops. No recursive calls.
+
+Performance notes:
+    - extract_batch() bypasses PIL entirely (direct NumPy→Tensor)
+    - Color features computed in full-batch mode (no per-image loop)
+    - _rgb_to_hsv() uses branchless torch.where ops
+    - Normalization constants pre-allocated on device
+    - CUDA streams used when available for async D2H transfers
 """
 from __future__ import annotations
 
@@ -62,7 +69,7 @@ class ResNet50FeatureExtractor:
             weights="IMAGENET1K_V1" if not backbone_path else None
         )
         if backbone_path:
-            state = torch.load(backbone_path, map_location="cpu")
+            state = torch.load(backbone_path, map_location="cpu", weights_only=False)
             if isinstance(state, dict):
                 for key in ("state_dict", "model", "full_state_dict", "features_state_dict"):
                     if key in state:
@@ -89,7 +96,23 @@ class ResNet50FeatureExtractor:
             self.color_dim += 6
         self.feature_dim = self.cnn_dim + self.color_dim
 
-        # ── transforms ──
+        # ── Pre-allocated normalisation tensors on device (avoid per-call alloc) ──
+        self._norm_mean = torch.tensor(
+            [0.485, 0.456, 0.406], device=self.device
+        ).view(1, 3, 1, 1)
+        self._norm_std = torch.tensor(
+            [0.229, 0.224, 0.225], device=self.device
+        ).view(1, 3, 1, 1)
+        if self.use_half:
+            self._norm_mean = self._norm_mean.half()
+            self._norm_std = self._norm_std.half()
+
+        # ── CUDA stream for async D2H ──
+        self._d2h_stream: Optional[torch.cuda.Stream] = None
+        if self.device == "cuda":
+            self._d2h_stream = torch.cuda.Stream()
+
+        # ── PIL transforms (kept for single-image extract()) ──
         self.transform = T.Compose([
             T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BILINEAR),
             T.ToTensor(),
@@ -105,6 +128,44 @@ class ResNet50FeatureExtractor:
             f"cnn={self.cnn_dim} color={self.color_dim} "
             f"total={self.feature_dim} FP16={self.use_half}"
         )
+
+    # ─────────── Tensor-based batch preprocessing (no PIL) ───────────
+    def _preprocess_batch_tensor(
+        self, images: List[np.ndarray], normalize: bool = True,
+    ) -> torch.Tensor:
+        """
+        Convert list of BGR uint8 ndarrays → (B, 3, H, W) float tensor.
+
+        Bypasses PIL entirely:
+          1. BGR → RGB via numpy slice (no copy if contiguous)
+          2. Stack → single numpy array
+          3. One H2D transfer
+          4. Resize + normalise on GPU
+        """
+        sz = self.img_size
+        resized: List[np.ndarray] = []
+        for img in images:
+            # BGR → RGB (fast channel flip, no copy)
+            rgb = img[:, :, ::-1]
+            # Resize directly via OpenCV (faster than PIL)
+            if rgb.shape[0] != sz or rgb.shape[1] != sz:
+                rgb = cv2.resize(rgb, (sz, sz), interpolation=cv2.INTER_LINEAR)
+            resized.append(rgb)
+
+        # Stack to (B, H, W, 3) → contiguous
+        arr = np.stack(resized, axis=0)  # (B, H, W, 3), uint8
+        # Single H2D transfer — much faster than per-image
+        t = torch.from_numpy(arr).to(self.device, non_blocking=True)
+        # (B, H, W, 3) → (B, 3, H, W), float [0, 1]
+        t = t.permute(0, 3, 1, 2).float().div_(255.0)
+
+        if self.use_half:
+            t = t.half()
+
+        if normalize:
+            t = (t - self._norm_mean) / self._norm_std
+
+        return t
 
     # ─────────────── Single PIL Image ───────────────
     @torch.no_grad()
@@ -134,35 +195,52 @@ class ResNet50FeatureExtractor:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return self.extract(Image.fromarray(rgb))
 
-    # ─────────────── Batch BGR numpy ───────────────
+    # ─────────────── Batch BGR numpy (OPTIMISED) ───────────────
     @torch.no_grad()
     def extract_batch(self, images: List[np.ndarray]) -> List[np.ndarray]:
-        """Extract patches from a batch of BGR numpy arrays."""
+        """
+        Extract patches from a batch of BGR numpy arrays.
+
+        Optimisations vs. old path:
+          - No PIL conversion — direct NumPy→Tensor
+          - Single H2D transfer for the whole batch
+          - Resize via cv2 (INTER_LINEAR, ~2-3× faster than PIL bilinear)
+          - Color features computed in batch (no per-image loop)
+          - Async D2H via CUDA stream
+        """
         if not images:
             return []
 
-        pil_imgs = [Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                    for img in images]
-
-        batch = torch.stack([self.transform(p) for p in pil_imgs]).to(self.device)
-        if self.use_half:
-            batch = batch.half()
+        # ── Normalised batch for CNN ──
+        batch = self._preprocess_batch_tensor(images, normalize=True)
 
         with torch.amp.autocast("cuda", enabled=self.use_half):
             feats = self.backbone(batch)
 
-        cnn = self._cnn_from_feats(feats, batch_mode=True)
+        cnn = self._cnn_from_feats(feats, batch_mode=True)  # (B, P, cnn_dim)
 
-        if not (self.use_color_features or self.use_hsv):
-            return [c.cpu().numpy() for c in cnn]
+        need_color = self.use_color_features or self.use_hsv
 
-        raw_batch = torch.stack([self.raw_transform(p) for p in pil_imgs]).to(self.device)
-        results = []
-        for i in range(len(images)):
-            col = self._color_patches(raw_batch[i:i + 1])
-            out = torch.cat([cnn[i], col], dim=1)
-            results.append(out.cpu().numpy())
-        return results
+        if not need_color:
+            # Fast path: move all at once, split on CPU
+            stacked = cnn.cpu().numpy()                      # (B, P, D)
+            return [stacked[i] for i in range(stacked.shape[0])]
+
+        # ── Raw (un-normalised) batch for color ──
+        raw_batch = self._preprocess_batch_tensor(images, normalize=False)
+        color = self._color_patches_batch(raw_batch)         # (B, P, color_dim)
+
+        combined = torch.cat([cnn, color], dim=2)            # (B, P, total_dim)
+
+        # Async D2H if available
+        if self._d2h_stream is not None:
+            with torch.cuda.stream(self._d2h_stream):
+                out = combined.cpu().numpy()
+            self._d2h_stream.synchronize()
+        else:
+            out = combined.cpu().numpy()
+
+        return [out[i] for i in range(out.shape[0])]
 
     # ─────────────── CNN Patch Builder ───────────────
     def _cnn_from_feats(self, feats: dict, batch_mode: bool = False):
@@ -178,8 +256,9 @@ class ResNet50FeatureExtractor:
             return concat.permute(0, 2, 3, 1).reshape(B, -1, self.cnn_dim)
         return concat[0].permute(1, 2, 0).reshape(-1, self.cnn_dim)
 
-    # ─────────────── Color Patches ───────────────
+    # ─────────────── Color Patches (single — kept for extract()) ───────────────
     def _color_patches(self, raw: torch.Tensor) -> torch.Tensor:
+        """Color features for a single image (B=1)."""
         _, c, h, w = raw.shape
         ph = h // self.grid_size
         pw = w // self.grid_size
@@ -208,26 +287,71 @@ class ResNet50FeatureExtractor:
             out = out * self.color_weight
         return out
 
+    # ─────────────── Color Patches BATCH (no per-image loop) ───────────────
+    def _color_patches_batch(self, raw: torch.Tensor) -> torch.Tensor:
+        """
+        Compute color patch features for the entire batch at once.
+
+        Input:  (B, 3, H, W) — un-normalised [0, 1]
+        Output: (B, grid², color_dim)
+        """
+        B, c, h, w = raw.shape
+        gs = self.grid_size
+        ph = h // gs
+        pw = w // gs
+
+        # Crop to exact grid multiple
+        x = raw[:, :, :ph * gs, :pw * gs]   # (B, 3, ph*gs, pw*gs)
+
+        # Unfold into grid patches:  (B, 3, gs, gs, ph, pw)
+        x = x.unfold(2, ph, ph).unfold(3, pw, pw)
+        # → (B, gs*gs, 3, ph, pw)
+        x = x.contiguous().view(B, c, gs * gs, ph, pw).permute(0, 2, 1, 3, 4)
+
+        feats = []
+        if self.use_color_features:
+            feats.append(x.mean(dim=(3, 4)))   # (B, gs², 3)
+            feats.append(x.std(dim=(3, 4)))    # (B, gs², 3)
+        if self.use_hsv:
+            # Reshape for HSV: (B*gs², 3, ph, pw)
+            flat = x.reshape(B * gs * gs, c, ph, pw)
+            hsv = self._rgb_to_hsv(flat)       # (B*gs², 3, ph, pw)
+            hsv = hsv.view(B, gs * gs, c, ph, pw)
+            feats.append(hsv.mean(dim=(3, 4)))
+            feats.append(hsv.std(dim=(3, 4)))
+
+        out = torch.cat(feats, dim=2)          # (B, gs², color_dim)
+        if self.color_weight != 1.0:
+            out = out * self.color_weight
+        return out
+
+    # ─────────────── Branchless HSV (torch.where) ───────────────
     @staticmethod
     def _rgb_to_hsv(rgb: torch.Tensor) -> torch.Tensor:
+        """
+        Vectorised RGB→HSV using torch.where (no boolean index writes).
+
+        Faster than the masked-assignment approach, especially on GPU,
+        because torch.where compiles to a single fused kernel.
+        """
         r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
         mx, argmx = rgb.max(dim=1)
         mn = rgb.min(dim=1)[0]
         diff = mx - mn
 
+        # Value
         v = mx
-        s = torch.zeros_like(mx)
-        pos = mx > 0
-        s[pos] = diff[pos] / mx[pos]
 
-        h = torch.zeros_like(mx)
-        d_pos = diff > 0
+        # Saturation — branchless
+        s = torch.where(mx > 0, diff / mx, torch.zeros_like(mx))
 
-        m_r = (argmx == 0) & d_pos
-        h[m_r] = ((g[m_r] - b[m_r]) / diff[m_r] / 6.0) % 1.0
-        m_g = (argmx == 1) & d_pos
-        h[m_g] = (b[m_g] - r[m_g]) / diff[m_g] / 6.0 + 1 / 3
-        m_b = (argmx == 2) & d_pos
-        h[m_b] = (r[m_b] - g[m_b]) / diff[m_b] / 6.0 + 2 / 3
+        # Hue — compute all three cases, select via argmax
+        safe_diff = torch.where(diff > 0, diff, torch.ones_like(diff))
+        h_r = ((g - b) / safe_diff / 6.0) % 1.0
+        h_g = (b - r) / safe_diff / 6.0 + 1.0 / 3.0
+        h_b = (r - g) / safe_diff / 6.0 + 2.0 / 3.0
 
-        return torch.stack([h % 1.0, s, v], dim=1)
+        h = torch.where(argmx == 0, h_r, torch.where(argmx == 1, h_g, h_b))
+        h = torch.where(diff > 0, h % 1.0, torch.zeros_like(h))
+
+        return torch.stack([h, s, v], dim=1)

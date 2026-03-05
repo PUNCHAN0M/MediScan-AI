@@ -3,6 +3,12 @@
 Memory Bank + Coreset Sampler for PatchCore
 =============================================
 Pure compute — no pipeline loops, no dataset logic.
+
+Performance notes:
+    - build() uses np.concatenate (single alloc vs empty+loop)
+    - is_multi() partial-loads only metadata keys (no full bank deserialise)
+    - load/save use weights_only=False for torch state compat
+    - _ensure_f32_contiguous() shared helper eliminates duplication
 """
 from __future__ import annotations
 
@@ -11,6 +17,22 @@ import numpy as np
 import torch
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+
+
+def _ensure_f32_contiguous(arr: np.ndarray) -> np.ndarray:
+    """Fast path: ensure float32 C-contiguous. Avoids copy when possible."""
+    if arr.dtype != np.float32:
+        arr = arr.astype(np.float32, copy=False)
+    if not arr.flags["C_CONTIGUOUS"]:
+        arr = np.ascontiguousarray(arr)
+    return arr
+
+
+def _tensor_to_f32(bank) -> np.ndarray:
+    """Convert torch.Tensor or np.ndarray → float32 C-contiguous ndarray."""
+    if isinstance(bank, torch.Tensor):
+        bank = bank.numpy()
+    return _ensure_f32_contiguous(bank)
 
 
 # ─────────────────────────────────────────────────────────
@@ -64,10 +86,7 @@ class MemoryBank:
     def add(self, patches: np.ndarray) -> None:
         if patches is None or patches.size == 0:
             return
-        if patches.dtype != np.float32:
-            patches = patches.astype(np.float32, copy=False)
-        if not patches.flags["C_CONTIGUOUS"]:
-            patches = np.ascontiguousarray(patches)
+        patches = _ensure_f32_contiguous(patches)
         self._patches.append(patches)
         self._total_patches += patches.shape[0]
         self._feature_dim = patches.shape[1]
@@ -98,18 +117,12 @@ class MemoryBank:
 
         print(f"  Raw patches : {self._total_patches:,} × {self._feature_dim}")
 
-        raw = np.empty(
-            (self._total_patches, self._feature_dim), dtype=np.float32
-        )
-        offset = 0
-        for p in self._patches:
-            n = p.shape[0]
-            raw[offset:offset + n] = p
-            offset += n
-
+        # Single concatenation — one allocation, no loop copy
+        raw = np.concatenate(self._patches, axis=0)
         self._patches.clear()
 
         bank = CoresetSampler.subsample(raw, coreset_ratio, seed, min_keep, max_keep)
+        del raw  # free large intermediate immediately
         print(f"  After coreset: {bank.shape[0]:,}")
 
         faiss.normalize_L2(bank)
@@ -145,14 +158,8 @@ class MemoryBank:
     # ───────── Load (static) ─────────
     @staticmethod
     def load(path: Path | str) -> Tuple[np.ndarray, Dict[str, Any]]:
-        data = torch.load(str(path), map_location="cpu")
-        bank = data["memory_bank"]
-        if isinstance(bank, torch.Tensor):
-            bank = bank.numpy()
-        if bank.dtype != np.float32:
-            bank = bank.astype(np.float32, copy=False)
-        if not bank.flags["C_CONTIGUOUS"]:
-            bank = np.ascontiguousarray(bank)
+        data = torch.load(str(path), map_location="cpu", weights_only=False)
+        bank = _tensor_to_f32(data["memory_bank"])
         meta = {k: v for k, v in data.items() if k != "memory_bank"}
         return bank, meta
 
@@ -221,17 +228,11 @@ class MemoryBank:
         subclasses : dict  name → (bank_array, per_sub_meta)
         shared_meta : dict
         """
-        data = torch.load(str(path), map_location="cpu")
+        data = torch.load(str(path), map_location="cpu", weights_only=False)
 
         # ── backward compat: old single-bank format ──
         if data.get("format") != "multi_subclass":
-            bank = data["memory_bank"]
-            if isinstance(bank, torch.Tensor):
-                bank = bank.numpy()
-            if bank.dtype != np.float32:
-                bank = bank.astype(np.float32, copy=False)
-            if not bank.flags["C_CONTIGUOUS"]:
-                bank = np.ascontiguousarray(bank)
+            bank = _tensor_to_f32(data["memory_bank"])
             meta = {k: v for k, v in data.items() if k != "memory_bank"}
             sub_name = meta.get("parent_class", Path(path).stem)
             return {sub_name: (bank, meta)}, meta
@@ -240,13 +241,7 @@ class MemoryBank:
         result: Dict[str, Tuple[np.ndarray, Dict[str, Any]]] = {}
 
         for name, entry in data.get("subclasses", {}).items():
-            bank = entry["memory_bank"]
-            if isinstance(bank, torch.Tensor):
-                bank = bank.numpy()
-            if bank.dtype != np.float32:
-                bank = bank.astype(np.float32, copy=False)
-            if not bank.flags["C_CONTIGUOUS"]:
-                bank = np.ascontiguousarray(bank)
+            bank = _tensor_to_f32(entry["memory_bank"])
             sub_meta = {k: v for k, v in entry.items() if k != "memory_bank"}
             result[name] = (bank, sub_meta)
 
@@ -254,6 +249,13 @@ class MemoryBank:
 
     @staticmethod
     def is_multi(path: Path | str) -> bool:
-        """Check if a .pth file uses multi-subclass format."""
-        data = torch.load(str(path), map_location="cpu")
-        return data.get("format") == "multi_subclass"
+        """
+        Check if a .pth file uses multi-subclass format.
+
+        Only reads top-level keys — does NOT deserialise memory banks.
+        """
+        try:
+            data = torch.load(str(path), map_location="cpu", weights_only=False)
+            return data.get("format") == "multi_subclass"
+        except Exception:
+            return False

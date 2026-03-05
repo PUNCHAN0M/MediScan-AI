@@ -685,7 +685,7 @@ class DefectSubTab(QWidget):
     """Mode 3 — manage defect training data + run PatchCore train.
 
     No Add Class button — classes come from pill_process.
-    Train uses run_train.py which calls config/base.py with SELECTED_CLASSES.
+    Train uses ``main.py train --classes ...`` (new architecture).
     """
 
     def __init__(self, settings, parent=None):
@@ -852,9 +852,9 @@ class DefectSubTab(QWidget):
             )
             self._grid.load_paths(paths)
 
-    def _get_checked_classes(self) -> list[str]:
-        """Return list of checked sub-class names."""
-        checked = []
+    def _get_checked_main_classes(self) -> list[str]:
+        """Return deduplicated list of main_class names whose sub-classes are checked."""
+        mains: set[str] = set()
         for i in range(self._tree.topLevelItemCount()):
             item = self._tree.topLevelItem(i)
             for j in range(item.childCount()):
@@ -862,8 +862,8 @@ class DefectSubTab(QWidget):
                 if ch.checkState(2) == Qt.CheckState.Checked:
                     data = ch.data(0, Qt.ItemDataRole.UserRole)
                     if data:
-                        checked.append(data[2])
-        return checked
+                        mains.add(data[1])   # data[1] is main_class
+        return sorted(mains)
 
     def _delete_class(self):
         sel = self._tree.currentItem()
@@ -923,24 +923,17 @@ class DefectSubTab(QWidget):
         self._load_tree()
 
     def _run_train(self):
-        """Run run_train.py with selected classes written to config."""
+        """Run ``main.py train --classes ...`` for selected main classes."""
         if self._runner and self._runner.isRunning():
             QMessageBox.information(self, "Training", "Training already in progress.")
             return
 
-        checked = self._get_checked_classes()
+        checked = self._get_checked_main_classes()
         if not checked:
             QMessageBox.warning(self, "Train", "Check at least one class in the tree before training.")
             return
 
-        # Write selected classes to config/base.py SELECTED_CLASSES
-        try:
-            self._update_selected_classes(checked)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to update config: {e}")
-            return
-
-        cmd = [sys.executable, "run_train.py"]
+        cmd = [sys.executable, "main.py", "train", "--classes"] + checked
         self._runner = ScriptRunner(cmd)
         self._runner.output.connect(self._on_train_output)
         self._runner.finished_signal.connect(self._on_train_done)
@@ -949,25 +942,6 @@ class DefectSubTab(QWidget):
         self._progress.setVisible(True)
         self._progress.setRange(0, 0)
         self._runner.start()
-
-    def _update_selected_classes(self, classes: list[str]):
-        """Patch SELECTED_CLASSES in config/base.py."""
-        config_path = Path("config") / "base.py"
-        if not config_path.exists():
-            return
-
-        text = config_path.read_text(encoding="utf-8")
-        import re
-        # Replace SELECTED_CLASSES = [...] with new list
-        new_val = repr(classes)
-        new_text, count = re.subn(
-            r"SELECTED_CLASSES\s*=\s*\[.*?\]",
-            f"SELECTED_CLASSES = {new_val}",
-            text,
-            flags=re.DOTALL,
-        )
-        if count > 0:
-            config_path.write_text(new_text, encoding="utf-8")
 
     def _on_train_output(self, line: str):
         self._lbl_status.setText(line[-120:])

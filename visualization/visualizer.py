@@ -14,24 +14,32 @@ from typing import Any, Dict, List, Optional, Tuple
 # ─────────────── Colors (BGR) ───────────────
 COLOR_NORMAL  = (0, 255, 100)
 COLOR_ANOMALY = (0, 0, 255)
+COLOR_PENDING = (200, 200, 0)   # Cyan-ish: detected but not yet scored
 COLOR_WHITE   = (255, 255, 255)
 COLOR_BLACK   = (0, 0, 0)
 
+def _status_color(status: str) -> tuple:
+    if status == "NORMAL":
+        return COLOR_NORMAL
+    if status == "ANOMALY":
+        return COLOR_ANOMALY
+    return COLOR_PENDING
+
 
 # ─────────────── Label helper ───────────────
-def _draw_label(
-    img: np.ndarray,
-    text: str,
-    x: int,
-    y: int,
-    color: Tuple[int, int, int],
-    font_scale: float = 0.6,
-    thickness: int = 2,
-) -> None:
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
-    cv2.rectangle(img, (x - 4, y - th - 6), (x + tw + 4, y + 4), COLOR_BLACK, -1)
-    cv2.putText(img, text, (x, y), font, font_scale, color, thickness, lineType=cv2.LINE_AA)
+# def _draw_label(
+#     img: np.ndarray,
+#     text: str,
+#     x: int,
+#     y: int,
+#     color: Tuple[int, int, int],
+#     font_scale: float = 0.6,
+#     thickness: int = 2,
+# ) -> None:
+#     font = cv2.FONT_HERSHEY_SIMPLEX
+#     (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+#     cv2.rectangle(img, (x - 4, y - th - 6), (x + tw + 4, y + 4), COLOR_BLACK, -1)
+#     cv2.putText(img, text, (x, y), font, font_scale, color, thickness, lineType=cv2.LINE_AA)
 
 
 # ─────────────── Draw realtime results ───────────────
@@ -50,16 +58,16 @@ def draw_pill_results(
         tid = r.get("id", -1)
         normal_from = r.get("normal_from", [])
 
-        color = COLOR_NORMAL if status == "NORMAL" else COLOR_ANOMALY
+        color = _status_color(status)
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
 
-        label = f"ID:{tid} | {status}"
-        if normal_from:
-            label += f" ({','.join(normal_from)})"
-        _draw_label(vis, label, x1, max(20, y1 - 8), color)
+        # label = f"ID:{tid} | {status}"
+        # if normal_from:
+        #     label += f" ({','.join(normal_from)})"
+        # _draw_label(vis, label, x1, max(20, y1 - 8), color)
 
-    if fps is not None:
-        _draw_label(vis, f"FPS: {fps:.1f}", 15, 30, COLOR_WHITE)
+    # if fps is not None:
+    #     _draw_label(vis, f"FPS: {fps:.1f}", 15, 30, COLOR_WHITE)
 
     return vis
 
@@ -81,12 +89,12 @@ def draw_summary(
         status = it.get("status", "UNKNOWN")
         tid = it.get("id", -1)
 
-        color = COLOR_NORMAL if status == "NORMAL" else COLOR_ANOMALY
+        color = _status_color(status)
         if status == "ANOMALY":
             anomaly_count += 1
 
-        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-        _draw_label(vis, f"ID:{tid} {status}", x1, max(20, y1 - 8), color)
+        # cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        # _draw_label(vis, f"ID:{tid} {status}", x1, max(20, y1 - 8), color)
 
     if show_overlay:
         text = f"Anomaly: {anomaly_count}"
@@ -98,7 +106,7 @@ def draw_summary(
             cv2.addWeighted(overlay, 0.6, vis, 0.4, 0, vis)
             cv2.putText(vis, text, (vis.shape[1] - 200, 45),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLOR_WHITE, 2, lineType=cv2.LINE_AA)
-        else:
-            _draw_label(vis, text, vis.shape[1] - 200, 40, COLOR_WHITE)
+        # else:
+        #     _draw_label(vis, text, vis.shape[1] - 200, 40, COLOR_WHITE)
 
     return vis
