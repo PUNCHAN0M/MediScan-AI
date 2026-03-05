@@ -6,12 +6,15 @@ Usage::
 
     python -m scripts.run_predict
     python -m scripts.run_predict --classes Androxsil ANTA1mg
+
+Reads all model/detection/scoring parameters from ``app_settings.json``
+so results are identical to the desktop app classifier.
 """
 from __future__ import annotations
 
 import argparse
 
-from core.config import Config
+from app.settings_manager import SettingsManager
 from core.device import get_device, setup_cuda, setup_seed
 from pipeline.infer_pipeline import PillInspector, InspectorConfig
 from pipeline.predict_pipeline import run_camera
@@ -22,14 +25,14 @@ def main():
     parser.add_argument("--classes", "-c", nargs="*", default=None)
     args = parser.parse_args()
 
-    cfg = Config()
+    settings = SettingsManager()
     device = get_device()
     setup_cuda()
-    setup_seed(cfg.train.seed)
+    setup_seed(int(settings.get("seed", 42)))
 
-    compare_classes = args.classes or list(cfg.train.selected_classes)
+    compare_classes = args.classes or []
 
-    inspector_cfg = InspectorConfig.from_config(cfg, compare_classes)
+    inspector_cfg = InspectorConfig.from_settings(settings.all(), compare_classes)
     inspector_cfg.device = device
 
     inspector = PillInspector(inspector_cfg)
@@ -37,10 +40,9 @@ def main():
     run_camera(
         inspector=inspector,
         compare_classes=compare_classes,
-        camera_index=cfg.camera.camera_index,
-        frames_before_summary=cfg.camera.frames_before_summary,
-        save_dir=cfg.paths.save_dir,
-        window_name=cfg.camera.window_name,
+        camera_index=int(settings.get("camera_index", 0)),
+        save_dir=None,
+        window_name="Pill Inspector",
     )
 
 

@@ -37,10 +37,10 @@ class InspectorConfig:
     yolo_model_path: str             = "model/detection/pill-detection-best-2.onnx"
 
     # YOLO
-    img_size: int                    = 512
+    img_size: int                    = 640
     conf: float                      = 0.5
     iou: float                       = 0.6
-    pad: int                         = 5
+    pad: int                         = 0
 
     # backbone
     model_size: int                  = 256
@@ -65,7 +65,7 @@ class InspectorConfig:
     track_max_age: int               = 10
 
     # pipeline
-    frames_before_summary: int       = 3
+    frames_before_summary: int       = 1
     device: Optional[str]            = None
 
     # performance
@@ -103,6 +103,41 @@ class InspectorConfig:
             track_iou_threshold=cfg.tracking.iou_threshold,
             track_max_age=cfg.tracking.max_age,
             frames_before_summary=cfg.camera.frames_before_summary,
+        )
+
+    @classmethod
+    def from_settings(cls, settings: dict, compare_classes: Optional[List[str]] = None) -> "InspectorConfig":
+        """
+        Build InspectorConfig from app_settings.json dict.
+
+        Mirrors ``from_config`` but reads the key names used by
+        ``SettingsManager`` so the desktop app produces **identical**
+        results to ``main.py predict``.
+        """
+        backbone_path = settings.get("backbone_model") or None
+        if backbone_path and not str(backbone_path).endswith(".pth"):
+            backbone_path = None
+
+        return cls(
+            compare_classes=compare_classes or [],
+            model_dir=Path(settings.get("model_dir", "./model/patchcore_resnet")),
+            yolo_model_path=str(settings.get("segmentation_model", "model/detection/pill-detection-best-2.onnx")),
+            img_size=int(settings.get("seg_img_size", 512)),
+            conf=float(settings.get("seg_conf", 0.5)),
+            iou=float(settings.get("seg_iou", 0.6)),
+            pad=int(settings.get("seg_pad", 0)),
+            model_size=int(settings.get("img_size", 256)),
+            grid_size=int(settings.get("grid_size", 16)),
+            use_color_features=bool(settings.get("use_color", True)),
+            use_hsv=bool(settings.get("use_hsv", True)),
+            color_weight=float(settings.get("color_weight", 1.5)),
+            backbone_path=str(backbone_path) if backbone_path else None,
+            k_nearest=int(settings.get("k_nearest", 3)),
+            threshold_multiplier=float(settings.get("threshold_mult", 1.0)),
+            crop_size=int(settings.get("img_size", 256)),
+            track_max_distance=float(settings.get("track_max_dist", 80.0)),
+            track_iou_threshold=float(settings.get("track_iou_thr", 0.80)),
+            track_max_age=int(settings.get("track_max_age", 10)),
         )
 
 

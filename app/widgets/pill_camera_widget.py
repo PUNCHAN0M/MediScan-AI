@@ -56,6 +56,8 @@ class PillCameraWidget(QWidget):
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._grab)
 
+        self._strip_pool: list[QLabel] = []   # reuse pill labels
+
         self._init_ui()
 
     def _init_ui(self):
@@ -176,13 +178,9 @@ class PillCameraWidget(QWidget):
         self.stopped.emit()
 
     def _clear_pill_strip(self):
-        """Remove all pills from the strip."""
-        while self._pill_strip_layout.count():
-            item = self._pill_strip_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        """Hide all pills in the strip (reuse pool)."""
+        for lbl in self._strip_pool:
+            lbl.setVisible(False)
 
     # ── internal ─────────────────────────────────────────
 
@@ -281,26 +279,32 @@ class PillCameraWidget(QWidget):
         scaled = pix.scaled(
             self._cam_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self._cam_label.setPixmap(scaled)
 
     def _update_pill_strip(self, crops: list):
-        # Clear existing
-        while self._pill_strip_layout.count():
-            item = self._pill_strip_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        """Update pill strip — reuse QLabel widgets from pool."""
+        needed = min(len(crops), 20)
 
-        for crop in crops[:20]:
+        # Grow pool if needed
+        while len(self._strip_pool) < needed:
             lbl = QLabel()
             lbl.setFixedSize(80, 80)
             lbl.setStyleSheet("border:1px solid #555;")
-            pix = self._cv2pixmap(crop, 80)
-            lbl.setPixmap(pix)
             self._pill_strip_layout.addWidget(lbl)
+            self._strip_pool.append(lbl)
+
+        # Update visible labels
+        for i in range(needed):
+            self._strip_pool[i].setPixmap(self._cv2pixmap(crops[i], 80))
+            if not self._strip_pool[i].isVisible():
+                self._strip_pool[i].setVisible(True)
+
+        # Hide surplus
+        for i in range(needed, len(self._strip_pool)):
+            if self._strip_pool[i].isVisible():
+                self._strip_pool[i].setVisible(False)
 
     @staticmethod
     def _cv2pixmap(img: np.ndarray, size: int) -> QPixmap:

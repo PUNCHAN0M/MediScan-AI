@@ -13,7 +13,7 @@ import argparse
 import cv2
 from pathlib import Path
 
-from core.config import Config
+from app.settings_manager import SettingsManager
 from core.device import get_device, setup_cuda, setup_seed
 from core.utils import list_images
 from pipeline.infer_pipeline import PillInspector, InspectorConfig
@@ -29,12 +29,12 @@ def main():
     if not args.image and not args.folder:
         parser.error("Provide --image or --folder")
 
-    cfg = Config()
+    settings = SettingsManager()
     device = get_device()
     setup_cuda()
-    setup_seed(cfg.train.seed)
+    setup_seed(int(settings.get("seed", 42)))
 
-    inspector_cfg = InspectorConfig.from_config(cfg, args.classes)
+    inspector_cfg = InspectorConfig.from_settings(settings.all(), args.classes)
     inspector_cfg.device = device
     inspector = PillInspector(inspector_cfg)
 

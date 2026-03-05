@@ -35,7 +35,10 @@ def _draw_label(
     color: Tuple[int, int, int],
     font_scale: float = 0.6,
     thickness: int = 2,
+    show_label: bool = True,
 ) -> None:
+    if not show_label:
+        return
     font = cv2.FONT_HERSHEY_SIMPLEX
     (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
     cv2.rectangle(img, (x - 4, y - th - 6), (x + tw + 4, y + 4), COLOR_BLACK, -1)
@@ -62,14 +65,13 @@ def draw_pill_results(
         color = _status_color(status)
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
 
-        if show_label:
-            label = f"ID:{tid} | {status}"
-            if normal_from:
-                label += f" ({','.join(normal_from)})"
-            _draw_label(vis, label, x1, max(20, y1 - 8), color)
+        label = f"ID:{tid} | {status}"
+        if normal_from:
+            label += f" ({','.join(normal_from)})"
+        _draw_label(vis, label, x1, max(20, y1 - 8), color, show_label=show_label)
 
-    if fps is not None and show_label:
-        _draw_label(vis, f"FPS: {fps:.1f}", 15, 30, COLOR_WHITE)
+    if fps is not None:
+        _draw_label(vis, f"FPS: {fps:.1f}", 15, 30, COLOR_WHITE, show_label=show_label)
 
     return vis
 
@@ -97,8 +99,7 @@ def draw_summary(
             anomaly_count += 1
 
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-        if show_label:
-            _draw_label(vis, f"ID:{tid} {status}", x1, max(20, y1 - 8), color)
+        _draw_label(vis, f"ID:{tid} {status}", x1, max(20, y1 - 8), color, show_label=show_label)
 
     if show_overlay:
         text = f"Anomaly: {anomaly_count}"
@@ -110,7 +111,7 @@ def draw_summary(
             cv2.addWeighted(overlay, 0.6, vis, 0.4, 0, vis)
             cv2.putText(vis, text, (vis.shape[1] - 200, 45),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLOR_WHITE, 2, lineType=cv2.LINE_AA)
-        elif show_label:
-            _draw_label(vis, text, vis.shape[1] - 200, 40, COLOR_WHITE)
+        else:
+            _draw_label(vis, text, vis.shape[1] - 200, 40, COLOR_WHITE, show_label=show_label)
 
     return vis

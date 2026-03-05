@@ -61,7 +61,7 @@ class YOLODetector:
         self,
         model_path: str,
         mode: str = "segment",
-        img_size: int = 512,
+        img_size: int = 640,
         conf: float = 0.5,
         iou: float = 0.6,
         device: str = "cuda",

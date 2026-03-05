@@ -150,6 +150,13 @@ class ClassifierPage(QWidget):
         self._selected_classes: list[str] = []
         self._applied_classes: list[str] = []   # classes currently loaded in inspector
         self._all_classes: list[str] = []
+
+        # ── widget pools (reuse instead of delete/create each frame) ──
+        self._seg_pool: list[QLabel] = []       # segmented pill labels
+        self._normal_pool: list[QLabel] = []    # normal pill labels
+        self._defect_pool: list[QLabel] = []    # defect pill labels
+        self._prev_defect_count: int = -1       # track defect label style changes
+
         self._init_ui()
         self._load_classes()
 
@@ -263,8 +270,10 @@ class ClassifierPage(QWidget):
         self._lbl_count  = QLabel("Count : 0")
         self._lbl_normal = QLabel("Normal : 0")
         self._lbl_defect = QLabel("Defect : 0")
+        self._lbl_count.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
+        self._lbl_normal.setStyleSheet("font-size:15px; font-weight:bold; color:green; padding:4px 0;")
+        self._lbl_defect.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
         for lbl in (self._lbl_count, self._lbl_normal, self._lbl_defect):
-            lbl.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
             info_lay.addWidget(lbl)
         right.addWidget(info_box)
 
@@ -461,43 +470,44 @@ class ClassifierPage(QWidget):
         self._lbl_count.setText("Count : 0")
         self._lbl_normal.setText("Normal : 0")
         self._lbl_defect.setText("Defect : 0")
-        self._lbl_normal.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
+        self._prev_defect_count = -1
         self._lbl_defect.setStyleSheet("font-size:15px; font-weight:bold; padding:4px 0;")
 
-        # Clear segmented pills
-        while self._pill_grid_layout.count():
-            item = self._pill_grid_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-
-        # Clear normal pills
-        while self._normal_layout.count():
-            item = self._normal_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-
-        # Clear defect pills
-        while self._defect_layout.count():
-            item = self._defect_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        # Hide pooled widgets (faster than delete + recreate)
+        for lbl in self._seg_pool:
+            lbl.setVisible(False)
+        for lbl in self._normal_pool:
+            lbl.setVisible(False)
+        for lbl in self._defect_pool:
+            lbl.setVisible(False)
 
     # ─────────────────── inspector ───────────────────────
     def _load_inspector(self):
-        """Lazy-load PillInspector from new pipeline."""
+        """
+        Lazy-load PillInspector using the SAME settings as ``main.py predict``.
+
+        Reads all parameters from ``app_settings.json`` via SettingsManager
+        so that YOLO model, backbone, thresholds, etc. are identical to
+        the CLI pipeline.
+        """
         try:
             from pipeline.infer_pipeline import PillInspector, InspectorConfig
+            from core.device import get_device
+
             classes = self._selected_classes or self._all_classes
-            config = InspectorConfig(compare_classes=list(classes))
+            settings_dict = self._settings.all() if hasattr(self._settings, 'all') else dict(self._settings)
+
+            config = InspectorConfig.from_settings(settings_dict, compare_classes=list(classes))
+            config.device = get_device()
+
             self._inspector = PillInspector(config)
+            print(f"[ClassifierPage] Inspector loaded: "
+                  f"YOLO={config.yolo_model_path} | "
+                  f"backbone={config.backbone_path} | "
+                  f"img_size={config.img_size} conf={config.conf} iou={config.iou}")
         except Exception as e:
             print(f"[ClassifierPage] Failed to load inspector: {e}")
+            import traceback; traceback.print_exc()
             self._inspector = None
 
     # ─────────────────── frame processing ────────────────
@@ -583,15 +593,17 @@ class ClassifierPage(QWidget):
             except Exception as e:
                 print(f"[ClassifierPage] Inference error: {e}")
 
-        # Update labels
+        # Update labels (text only — style set once, not every frame)
         self._lbl_count.setText(f"Count : {count}")
         self._lbl_normal.setText(f"Normal : {normal_count}")
         self._lbl_defect.setText(f"Defect : {defect_count}")
 
-        self._lbl_normal.setStyleSheet("font-size:15px; font-weight:bold; color:green; padding:4px 0;")
-        self._lbl_defect.setStyleSheet(
-            f"font-size:15px; font-weight:bold; color:{'red' if defect_count > 0 else '#333'}; padding:4px 0;"
-        )
+        # Only update style when defect state actually changes
+        if defect_count != self._prev_defect_count:
+            self._prev_defect_count = defect_count
+            self._lbl_defect.setStyleSheet(
+                f"font-size:15px; font-weight:bold; color:{'red' if defect_count > 0 else '#333'}; padding:4px 0;"
+            )
 
         # Display camera view (our own annotated display)
         self._show_frame(display)
@@ -601,52 +613,62 @@ class ClassifierPage(QWidget):
         self._update_category_pills(normal_crops, defect_crops)
 
     def _update_pill_grid(self, crops: list):
-        """Show all segmented pills in the horizontal strip."""
-        # Clear previous
-        while self._pill_grid_layout.count():
-            item = self._pill_grid_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
+        """Show all segmented pills — reuse QLabel widgets from pool."""
+        needed = min(len(crops), 20)
 
-        for crop in crops[:20]:  # limit to 20
+        # Grow pool if needed
+        while len(self._seg_pool) < needed:
             lbl = QLabel()
             lbl.setFixedSize(80, 80)
             lbl.setStyleSheet("border:1px solid #555;")
-            pix = self._cv2pixmap(crop, 80)
-            lbl.setPixmap(pix)
             self._pill_grid_layout.addWidget(lbl)
+            self._seg_pool.append(lbl)
+
+        # Update visible labels
+        for i in range(needed):
+            lbl = self._seg_pool[i]
+            lbl.setPixmap(self._cv2pixmap(crops[i], 80))
+            if not lbl.isVisible():
+                lbl.setVisible(True)
+
+        # Hide surplus labels
+        for i in range(needed, len(self._seg_pool)):
+            if self._seg_pool[i].isVisible():
+                self._seg_pool[i].setVisible(False)
 
     def _update_category_pills(self, normals: list, defects: list):
-        """Update normal/defect pill rows."""
-        # Clear normal
-        while self._normal_layout.count():
-            item = self._normal_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-        for crop in normals[:10]:
+        """Update normal/defect pill rows — reuse QLabel widgets from pools."""
+        # ── Normal ──
+        n_needed = min(len(normals), 10)
+        while len(self._normal_pool) < n_needed:
             lbl = QLabel()
             lbl.setFixedSize(60, 60)
             lbl.setStyleSheet("border:1px solid #00c853;")
-            lbl.setPixmap(self._cv2pixmap(crop, 60))
             self._normal_layout.addWidget(lbl)
+            self._normal_pool.append(lbl)
+        for i in range(n_needed):
+            self._normal_pool[i].setPixmap(self._cv2pixmap(normals[i], 60))
+            if not self._normal_pool[i].isVisible():
+                self._normal_pool[i].setVisible(True)
+        for i in range(n_needed, len(self._normal_pool)):
+            if self._normal_pool[i].isVisible():
+                self._normal_pool[i].setVisible(False)
 
-        # Clear defect
-        while self._defect_layout.count():
-            item = self._defect_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-        for crop in defects[:10]:
+        # ── Defect ──
+        d_needed = min(len(defects), 10)
+        while len(self._defect_pool) < d_needed:
             lbl = QLabel()
             lbl.setFixedSize(60, 60)
             lbl.setStyleSheet("border:1px solid #ff1744;")
-            lbl.setPixmap(self._cv2pixmap(crop, 60))
             self._defect_layout.addWidget(lbl)
+            self._defect_pool.append(lbl)
+        for i in range(d_needed):
+            self._defect_pool[i].setPixmap(self._cv2pixmap(defects[i], 60))
+            if not self._defect_pool[i].isVisible():
+                self._defect_pool[i].setVisible(True)
+        for i in range(d_needed, len(self._defect_pool)):
+            if self._defect_pool[i].isVisible():
+                self._defect_pool[i].setVisible(False)
 
     @staticmethod
     def _cv2pixmap(img: np.ndarray, size: int) -> QPixmap:
@@ -670,7 +692,7 @@ class ClassifierPage(QWidget):
         scaled = pix.scaled(
             self._cam_label.size(),
             Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+            Qt.TransformationMode.FastTransformation,
         )
         self._cam_label.setPixmap(scaled)
 
