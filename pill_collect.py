@@ -28,7 +28,7 @@ CONFIG = {
     "INPUT_DIR": None,
 
     # Output Directory
-    "OUTPUT_DIR": "data/Androxsil/Androxsil",
+    "OUTPUT_DIR": "data/Clozapine/Clozapine",
 
     # Confidence Threshold (0.0 - 1.0)
     "CONFIDENCE": 0.25,

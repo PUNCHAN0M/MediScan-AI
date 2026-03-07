@@ -45,14 +45,14 @@ class InspectorConfig:
     # backbone
     model_size: int                  = 256
     grid_size: int                   = 16
-    use_color_features: bool         = True
-    use_hsv: bool                    = True
-    color_weight: float              = 1.5
+    use_color_features: bool         = False
+    use_hsv: bool                    = False
+    color_weight: float              = 1.0
     backbone_path: Optional[str]     = None
 
     # scorer
     k_nearest: int                   = 3
-    score_method: str                = "max"
+    score_method: str                = "top5_mean"
     threshold_multiplier: float      = 1.0
 
     # crop
@@ -65,10 +65,11 @@ class InspectorConfig:
     track_max_age: int               = 10
 
     # pipeline
-    frames_before_summary: int       = 1
+    ema_alpha: float                 = 0.3
     device: Optional[str]            = None
 
     # performance
+    use_half: bool                   = False  # FP32 for accuracy (match Old Version)
     early_exit_normal: bool          = True   # stop scoring once NORMAL found
 
     def __post_init__(self):
@@ -102,7 +103,7 @@ class InspectorConfig:
             track_max_distance=cfg.tracking.max_distance,
             track_iou_threshold=cfg.tracking.iou_threshold,
             track_max_age=cfg.tracking.max_age,
-            frames_before_summary=cfg.camera.frames_before_summary,
+            ema_alpha=cfg.camera.ema_alpha,
         )
 
     @classmethod
@@ -128,9 +129,9 @@ class InspectorConfig:
             pad=int(settings.get("seg_pad", 0)),
             model_size=int(settings.get("img_size", 256)),
             grid_size=int(settings.get("grid_size", 16)),
-            use_color_features=bool(settings.get("use_color", True)),
-            use_hsv=bool(settings.get("use_hsv", True)),
-            color_weight=float(settings.get("color_weight", 1.5)),
+            use_color_features=bool(settings.get("use_color", False)),
+            use_hsv=bool(settings.get("use_hsv", False)),
+            color_weight=float(settings.get("color_weight", 1.0)),
             backbone_path=str(backbone_path) if backbone_path else None,
             k_nearest=int(settings.get("k_nearest", 3)),
             threshold_multiplier=float(settings.get("threshold_mult", 1.0)),
@@ -180,6 +181,7 @@ class PillInspector:
             img_size=cfg.model_size,
             grid_size=cfg.grid_size,
             device=cfg.device,
+            use_half=cfg.use_half,
             use_color_features=cfg.use_color_features,
             use_hsv=cfg.use_hsv,
             color_weight=cfg.color_weight,
@@ -198,7 +200,6 @@ class PillInspector:
             self._ensure_index(class_name)
 
     def _init_state(self):
-        self._votes: Dict[int, Dict[str, Any]] = {}
         self._last_frame: Optional[np.ndarray] = None
         self._last_results: List[Dict[str, Any]] = []
         self._last_crops: Dict[int, np.ndarray] = {}

@@ -97,11 +97,13 @@ class _ScoringWorker:
     - Main thread calls ``submit(crops, infos)`` after YOLO detection.
     - Worker processes only the **latest** batch (auto frame-skip).
     - Results are read via ``status_map`` — {track_id: status_info}.
+    - Per-track EMA smoothing prevents status flickering.
     """
 
-    def __init__(self, inspector: PillInspector, classes: list):
+    def __init__(self, inspector: PillInspector, classes: list, ema_alpha: float = 0.3):
         self._inspector = inspector
         self._classes = classes
+        self._ema_alpha = ema_alpha
 
         # Input slot (latest-only)
         self._input_lock = threading.Lock()
@@ -111,6 +113,9 @@ class _ScoringWorker:
         self._result_lock = threading.Lock()
         self._status_map: Dict[int, Dict[str, Any]] = {}
         self._crops_map: Dict[int, np.ndarray] = {}
+
+        # EMA state per track_id: {tid: {"ema_scores": {class/sub: float}}}
+        self._ema_state: Dict[int, Dict[str, float]] = {}
 
         self._new_input = threading.Event()
         self._stop_event = threading.Event()
@@ -140,6 +145,43 @@ class _ScoringWorker:
         self._new_input.set()
         self._thread.join(timeout=3.0)
 
+    def _update_ema(self, tid: int, raw_scores: Dict[str, float]) -> Dict[str, float]:
+        """
+        Update EMA scores for a track_id and return the smoothed scores.
+
+        EMA_new = α * score_new  +  (1-α) * EMA_prev
+        First observation initialises the EMA (no smoothing).
+        """
+        alpha = self._ema_alpha
+        prev = self._ema_state.get(tid, {})
+        smoothed: Dict[str, float] = {}
+
+        for key, score in raw_scores.items():
+            if key in prev:
+                smoothed[key] = alpha * score + (1.0 - alpha) * prev[key]
+            else:
+                smoothed[key] = score  # first observation
+
+        self._ema_state[tid] = smoothed
+        return smoothed
+
+    def _decide_status(
+        self,
+        smoothed_scores: Dict[str, float],
+        thresholds: Dict[str, float],
+    ) -> tuple:
+        """
+        Decide NORMAL/ANOMALY from EMA-smoothed scores.
+
+        Returns (status, normal_from).
+        """
+        normal_from: List[str] = []
+        for key, score in smoothed_scores.items():
+            if score <= thresholds.get(key, 0.5):
+                normal_from.append(key)
+        status = "NORMAL" if normal_from else "ANOMALY"
+        return status, normal_from
+
     def _loop(self) -> None:
         while not self._stop_event.is_set():
             self._new_input.wait()
@@ -159,23 +201,46 @@ class _ScoringWorker:
                     crops, infos, class_names=self._classes,
                 )
 
+                # Collect thresholds from inspector for EMA decision
+                thresholds: Dict[str, float] = {}
+                for cls_name, sub_thr in self._inspector._sub_thresholds.items():
+                    for sub_name, thr in sub_thr.items():
+                        thresholds[f"{cls_name}/{sub_name}"] = thr
+
+                # Track which tids are still visible
+                active_tids: set = set()
+
                 new_status: Dict[int, Dict[str, Any]] = {}
                 new_crops: Dict[int, np.ndarray] = {}
                 for r, crop in zip(results, crops):
                     tid = r["id"]
+                    active_tids.add(tid)
+                    raw_scores = r.get("class_scores", {})
+
+                    # EMA smooth per track
+                    smoothed = self._update_ema(tid, raw_scores)
+                    status, normal_from = self._decide_status(smoothed, thresholds)
+
                     new_status[tid] = {
-                        "status": r["status"],
-                        "class_scores": r.get("class_scores", {}),
-                        "normal_from": r.get("normal_from", []),
+                        "status": status,
+                        "class_scores": smoothed,
+                        "normal_from": normal_from,
                     }
                     if tid >= 0:
                         new_crops[tid] = crop
+
+                # Prune EMA state for tracks no longer visible
+                stale = [t for t in self._ema_state if t not in active_tids]
+                for t in stale:
+                    del self._ema_state[t]
 
                 with self._result_lock:
                     self._status_map = new_status
                     self._crops_map = new_crops
             except Exception as e:
-                print(f"[Scoring] Error: {e}")
+                import traceback
+                print(f"[Scoring] Error: {type(e).__name__}: {e}")
+                traceback.print_exc()
 
 
 # ─────────────────────────────────────────────
@@ -185,7 +250,7 @@ def run_camera(
     inspector: PillInspector,
     compare_classes: list,
     camera_index: int = 0,
-    frames_before_summary: int = 3,
+    ema_alpha: float = 0.3,
     save_dir: Optional[Path] = None,
     window_name: str = "Pill Inspector",
     zoom: float = 1.2,
@@ -218,7 +283,7 @@ def run_camera(
     print(f"Compare classes: {compare_classes}")
     print("Hotkeys: s=save | r=reset | Enter=summarize | q/ESC=quit\n")
 
-    worker = _ScoringWorker(inspector, compare_classes)
+    worker = _ScoringWorker(inspector, compare_classes, ema_alpha=ema_alpha)
     fps_counter = FPSCounter()
 
     try:

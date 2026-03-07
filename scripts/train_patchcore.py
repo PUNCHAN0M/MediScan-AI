@@ -101,6 +101,7 @@ def main():
         img_size=cfg.image.image_size,
         grid_size=cfg.backbone.grid_size,
         device=device,
+        use_half=False,
         use_color_features=cfg.backbone.use_color_features,
         use_hsv=cfg.backbone.use_hsv,
         color_weight=cfg.backbone.color_weight,

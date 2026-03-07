@@ -68,7 +68,6 @@ class _ScoringWorker:
         self._result_lock = threading.Lock()
         self._status_map: Dict[int, Dict[str, Any]] = {}
         self._crops_map: Dict[int, np.ndarray] = {}
-        self._generation: int = 0
         self._new_input = threading.Event()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -88,11 +87,6 @@ class _ScoringWorker:
     def crops_map(self) -> Dict[int, np.ndarray]:
         with self._result_lock:
             return dict(self._crops_map)
-
-    @property
-    def generation(self) -> int:
-        with self._result_lock:
-            return self._generation
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -127,7 +121,6 @@ class _ScoringWorker:
                 with self._result_lock:
                     self._status_map = new_status
                     self._crops_map = new_crops
-                    self._generation += 1
             except Exception as e:
                 print(f"[ScoringWorker] {e}")
 
@@ -153,10 +146,6 @@ class VerifyPage(QWidget):
         self._selected_classes: list[str] = []
         self._applied_classes: list[str] = []
         self._all_classes: list[str] = []
-
-        # Vote accumulator: {track_id: {"normal": N, "anomaly": N}}
-        self._votes: Dict[int, Dict[str, int]] = {}
-        self._last_gen: int = 0
 
         # Widget pools (reuse instead of delete/create each frame)
         self._normal_pool: list[QLabel] = []
@@ -401,8 +390,6 @@ class VerifyPage(QWidget):
             self._worker.stop()
             self._worker = None
         self._inspector = None
-        self._votes.clear()
-        self._last_gen = 0
         self._load_inspector()
         self._applied_classes = list(self._selected_classes)
         self._btn_apply.setVisible(False)
@@ -471,8 +458,6 @@ class VerifyPage(QWidget):
         self._lbl_defect.setStyleSheet(
             "font-size:15px; font-weight:bold; padding:4px 0;"
         )
-        self._votes.clear()
-        self._last_gen = 0
         for lbl in self._normal_pool:
             lbl.setVisible(False)
         for lbl in self._defect_pool:
@@ -534,44 +519,17 @@ class VerifyPage(QWidget):
                 crops_map = self._worker.crops_map if has_scorer else {}
                 count = len(infos)
 
-                # ── Accumulate votes when new scoring results arrive ──
-                if has_scorer:
-                    gen = self._worker.generation
-                    if gen != self._last_gen:
-                        self._last_gen = gen
-                        for tid, res in scored.items():
-                            st = res["status"]
-                            if tid not in self._votes:
-                                self._votes[tid] = {"normal": 0, "anomaly": 0}
-                            if st == "NORMAL":
-                                self._votes[tid]["normal"] += 1
-                            elif st == "ANOMALY":
-                                self._votes[tid]["anomaly"] += 1
-
-                # Prune votes for track_ids no longer detected
-                active_tids = {info.get("track_id", -1) for info in infos}
-                dead = [t for t in self._votes if t not in active_tids]
-                for t in dead:
-                    del self._votes[t]
-
                 for i, info in enumerate(infos):
                     tid = info.get("track_id", -1)
                     bbox = info.get("bbox", None)
                     center = info.get("center", None)
+                    cached = scored.get(tid) if has_scorer else None
+                    status = cached["status"] if cached else ("SCORING" if has_scorer else "PENDING")
                     crop_img = (
                         crops_map.get(tid)
                         if crops_map
                         else (crops[i] if i < len(crops) else None)
                     )
-
-                    # Determine status by majority vote
-                    v = self._votes.get(tid)
-                    if v and (v["normal"] + v["anomaly"]) > 0:
-                        status = "NORMAL" if v["normal"] >= v["anomaly"] else "ANOMALY"
-                    elif has_scorer:
-                        status = "SCORING"
-                    else:
-                        status = "PENDING"
 
                     if status == "ANOMALY":
                         defect_count += 1

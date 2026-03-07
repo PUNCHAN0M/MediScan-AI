@@ -23,6 +23,7 @@ Performance notes:
 from __future__ import annotations
 
 import cv2
+import time
 import numpy as np
 from pathlib import Path
 from PIL import Image
@@ -169,10 +170,12 @@ class TrainPipeline:
             print(f"  [Skip] No images in {sub_dir.name}")
             return None
 
+        t_sub_start = time.perf_counter()
         print(f"  [SubClass] {sub_dir.name} | {len(image_paths)} images")
 
         # ── Batch Feature Extraction ──
         bank = MemoryBank()
+        t_extract_start = time.perf_counter()
 
         for i in range(0, len(image_paths), self.batch_size):
             batch_paths = image_paths[i : i + self.batch_size]
@@ -198,6 +201,9 @@ class TrainPipeline:
             print(f"  [Skip] No patches for {sub_dir.name}")
             return None
 
+        t_extract_elapsed = time.perf_counter() - t_extract_start
+        print(f"  [Extract] done in {t_extract_elapsed:.1f}s | elapsed: {time.perf_counter() - t_sub_start:.1f}s")
+
         # ── Build Coreset ──
         memory = bank.build(
             coreset_ratio=self.coreset_ratio,
@@ -206,7 +212,9 @@ class TrainPipeline:
 
         # ── Calibrate Threshold ──
         threshold = self._calibrate(memory)
-        print(f"  [Threshold] {sub_dir.name}  →  {threshold:.4f}")
+
+        t_sub_elapsed = time.perf_counter() - t_sub_start
+        print(f"  [Threshold] {sub_dir.name}  →  {threshold:.4f}  | total: {t_sub_elapsed:.1f}s")
 
         return {
             "memory_bank": memory,
@@ -218,16 +226,28 @@ class TrainPipeline:
     #  Calibration (batch mode)
     # ═══════════════════════════════════════════════════════
     def _calibrate(self, memory: np.ndarray) -> float:
+        t_calib_start = time.perf_counter()
+
         if self.bad_dir is None:
-            print("  [Calibrate] No bad_dir → fallback")
+            print(f"  [Calibrate] mode=FALLBACK  reason=no bad_dir  value={self.fallback_threshold:.4f}")
             return self.fallback_threshold
 
         bad_paths = list_images_recursive(self.bad_dir)
         if not bad_paths:
-            print("  [Calibrate] No BAD images → fallback")
+            print(f"  [Calibrate] mode=FALLBACK  reason=no images in bad_dir  value={self.fallback_threshold:.4f}")
             return self.fallback_threshold
 
-        scorer = PatchCoreScorer(k_nearest=self.k_nearest, assume_normalized=False)
+        print(f"  [Calibrate] mode=BAD_DATA  bad_images={len(bad_paths)}  bad_dir={self.bad_dir}")
+
+        # Use stable old-style scorer path for calibration:
+        # - FlatIP index (no IVF clustering)
+        # - CPU index (avoid GPU FAISS numeric edge-cases)
+        scorer = PatchCoreScorer(
+            k_nearest=self.k_nearest,
+            assume_normalized=False,
+            use_gpu=False,
+            use_ivf=False,
+        )
         scorer.build_index(memory)
 
         # ── Batch calibration — process in batches instead of one-by-one ──
@@ -252,10 +272,28 @@ class TrainPipeline:
                 scores.append(score)
 
         if not scores:
+            print(f"  [Calibrate] mode=FALLBACK  reason=all bad images failed to load  value={self.fallback_threshold:.4f}")
             return self.fallback_threshold
 
         arr = np.array(scores, dtype=np.float32)
-        return float(np.percentile(arr, 5.0))
+        finite = np.isfinite(arr)
+        n_bad = int((~finite).sum())
+        if n_bad > 0:
+            arr = arr[finite]
+            print(f"  [Calibrate] dropped_non_finite={n_bad}")
+
+        if arr.size == 0:
+            print(f"  [Calibrate] mode=FALLBACK  reason=all scores non-finite  value={self.fallback_threshold:.4f}")
+            return self.fallback_threshold
+
+        result = float(np.percentile(arr, 5.0))
+        t_calib_elapsed = time.perf_counter() - t_calib_start
+        print(
+            f"  [Calibrate] scored={len(scores)}  "
+            f"min={arr.min():.4f}  max={arr.max():.4f}  mean={arr.mean():.4f}  "
+            f"p5={result:.4f}  time={t_calib_elapsed:.1f}s"
+        )
+        return result
 
     # ═══════════════════════════════════════════════════════
     #  Helpers

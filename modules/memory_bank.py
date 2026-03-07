@@ -125,6 +125,15 @@ class MemoryBank:
         del raw  # free large intermediate immediately
         print(f"  After coreset: {bank.shape[0]:,}")
 
+        # Sanitize NaN/Inf (can arise from FP16 color/HSV features)
+        nan_mask = ~np.isfinite(bank)
+        if nan_mask.any():
+            n_bad = int(nan_mask.sum())
+            print(f"  [Warning] Replacing {n_bad} NaN/Inf values with 0")
+            bank = np.where(nan_mask, 0.0, bank).astype(np.float32)
+            if not bank.flags["C_CONTIGUOUS"]:
+                bank = np.ascontiguousarray(bank)
+
         faiss.normalize_L2(bank)
 
         self._bank = bank

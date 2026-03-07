@@ -19,10 +19,10 @@ from typing import List, Optional, Set
 class PathConfig:
     """All filesystem paths."""
     data_root: Path            = Path("./data_train_defection")
-    bad_dir: str               = "data_bad/"
+    bad_dir: Path              = Path("./data_bad")
     save_dir: Path             = Path("./data/inspected")
     model_output_dir: Path     = Path("./weights/patchcore_resnet")
-    segmentation_model: str    = "weights/detection/pill-detection-best-1.onnx"
+    segmentation_model: str    = "weights/detection/pill-detection-best-2.onnx"
     backbone: str              = "weights/backbone/resnet_last.pth"
 
 
@@ -39,7 +39,7 @@ class YOLOConfig:
     img_size: int              = 1280
     conf: float                = 0.25
     iou: float                 = 0.6
-    pad: int                   = 0
+    pad: int                   = 5
 
 
 @dataclass(frozen=True)
@@ -56,24 +56,24 @@ class BackboneConfig:
     layers: tuple              = ("layer1", "layer2", "layer3")
     layer_channels: dict       = field(default_factory=lambda: {"layer1": 256, "layer2": 512, "layer3": 1024})
     grid_size: int             = 16
-    coreset_ratio: float       = 0.25
+    coreset_ratio: float       = 0.10
     coreset_min_keep: int      = 1_000
     coreset_max_keep: int      = 20_000
     k_nearest: int             = 3
-    score_method: str          = "max"
+    score_method: str          = "top5_mean"
     threshold_multiplier: float = 1.0
     fallback_threshold: float  = 0.50
-    use_color_features: bool   = True
-    use_hsv: bool              = True
-    color_weight: float        = 1.5
-    n_finetune_steps: int      = 351
+    use_color_features: bool   = False
+    use_hsv: bool              = False
+    color_weight: float        = 1.0
+    n_finetune_steps: int      = 601
 
 
 @dataclass(frozen=True)
 class CameraConfig:
     """Camera / realtime settings."""
     camera_index: int          = 0
-    frames_before_summary: int = 3
+    ema_alpha: float           = 0.3
     window_name: str           = "Pill Inspector"
 
 

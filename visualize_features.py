@@ -9,6 +9,7 @@ import umap
 from sklearn.metrics.pairwise import cosine_similarity
 from modules.feature_extractor import ResNet50FeatureExtractor
 from matplotlib.lines import Line2D
+from core.utils import list_images_recursive
 
 def main():
 
@@ -19,7 +20,7 @@ def main():
     # 📂 PATH
     # =============================
     base_good_dir = Path("data_train_defection")
-    bad_base_dir = Path("data_yolo/each_bad")
+    bad_base_dir = Path("data_bad")
 
     # =============================
     # 🔍 SCAN GOOD
@@ -42,20 +43,20 @@ def main():
     # =============================
     bad_classes = {}
 
-    for color_folder in bad_base_dir.iterdir():
-        if not color_folder.is_dir():
-            continue
-
-        for sub_folder in color_folder.iterdir():
-            display_name = f"{color_folder.name}_{sub_folder.name}"
-            bad_classes[display_name] = sub_folder
+    if bad_base_dir.exists():
+        for class_dir in bad_base_dir.iterdir():
+            if not class_dir.is_dir():
+                continue
+            bad_imgs = list_images_recursive(class_dir)
+            if bad_imgs:
+                bad_classes[class_dir.name] = bad_imgs
 
     # =============================
     # 🧠 BACKBONES
     # =============================
     BACKBONE_CONFIG = {
-        "FineTuned_before": 'weights/backbone/resnet_backbone_20260302_160330.pth',
-        # "FineTuned_after": "weights/backbone/resnet_backbone_20260227_152310.pth",
+        "FineTuned_after": 'weights/backbone/resnet_backbone_20260307_172030.pth',
+        "FineTuned_before": "weights/backbone/resnet_last.pth",
     }
 
     extractors = {}
@@ -107,9 +108,9 @@ def main():
                 pill_conditions.append("good")
 
         # BAD
-        for cls, folder in bad_classes.items():
+        for cls, bad_paths in bad_classes.items():
 
-            for img_path in folder.glob("*.*"):
+            for img_path in bad_paths:
 
                 img = Image.open(img_path).convert("RGB")
 

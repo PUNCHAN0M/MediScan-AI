@@ -39,15 +39,18 @@ class PatchCoreScorer:
         k_nearest: int = 3,
         assume_normalized: bool = False,
         use_gpu: Optional[bool] = None,
+        use_ivf: bool = False,
         gpu_id: int = 0,
     ):
         self.k = k_nearest
         self.assume_normalized = assume_normalized
+        self.use_ivf = use_ivf
         self.gpu_id = gpu_id
 
-        # Auto GPU: True if hardware supports it, unless explicitly False
+        # Force CPU for reproducibility & accuracy (Old Version behaviour)
+        # GPU FAISS can introduce floating-point discrepancies
         if use_gpu is None:
-            self.use_gpu = _FAISS_HAS_GPU
+            self.use_gpu = False
         else:
             self.use_gpu = use_gpu and _FAISS_HAS_GPU
 
@@ -67,13 +70,21 @@ class PatchCoreScorer:
             bank = bank.astype(np.float32, copy=False)
         if not bank.flags["C_CONTIGUOUS"]:
             bank = np.ascontiguousarray(bank)
+
+        # Guard against NaN/Inf — FAISS crashes on non-finite values
+        nan_mask = ~np.isfinite(bank)
+        if nan_mask.any():
+            bank = np.where(nan_mask, 0.0, bank).astype(np.float32)
+            if not bank.flags["C_CONTIGUOUS"]:
+                bank = np.ascontiguousarray(bank)
+
         if not self.assume_normalized:
             faiss.normalize_L2(bank)
 
         n, d = bank.shape
 
-        # ── Choose index type based on bank size ──
-        if n > self.IVF_THRESHOLD:
+        # ── Choose index type ──
+        if self.use_ivf and n > self.IVF_THRESHOLD:
             n_lists = min(max(n // self.IVF_NLIST_FACTOR, 16), 256)
             quantizer = faiss.IndexFlatIP(d)
             index = faiss.IndexIVFFlat(quantizer, d, n_lists, faiss.METRIC_INNER_PRODUCT)
@@ -113,10 +124,23 @@ class PatchCoreScorer:
             patches = patches.astype(np.float32, copy=False)
         if not patches.flags["C_CONTIGUOUS"]:
             patches = np.ascontiguousarray(patches)
+
+        # Guard query features against NaN/Inf before normalization/search
+        q_bad = ~np.isfinite(patches)
+        if q_bad.any():
+            patches = np.where(q_bad, 0.0, patches).astype(np.float32)
+            if not patches.flags["C_CONTIGUOUS"]:
+                patches = np.ascontiguousarray(patches)
+
         if not self.assume_normalized:
             faiss.normalize_L2(patches)
 
         sim, _ = idx.search(patches, self.k)
+        # Numerical safety for downstream aggregation
+        if not np.isfinite(sim).all():
+            sim = np.nan_to_num(sim, nan=-1.0, posinf=1.0, neginf=-1.0)
+        sim = np.clip(sim, -1.0, 1.0)
+
         # In-place mean across k-nearest (avoids temp array allocation)
         return np.subtract(1.0, sim.mean(axis=1))
 

@@ -53,8 +53,10 @@ class ResNet50FeatureExtractor:
             torch.backends.cudnn.benchmark = True
             torch.set_float32_matmul_precision("high")
 
+        # ── Always use FP32 for accuracy (Old Version behaviour) ──
+        # FP16 causes precision loss in cosine similarity → unstable thresholds
         if use_half is None:
-            self.use_half = self.device == "cuda"
+            self.use_half = False
         else:
             self.use_half = use_half and self.device == "cuda"
 
@@ -113,13 +115,14 @@ class ResNet50FeatureExtractor:
             self._d2h_stream = torch.cuda.Stream()
 
         # ── PIL transforms (kept for single-image extract()) ──
+        # Use BICUBIC for better low-level feature preservation (matches Old Version)
         self.transform = T.Compose([
-            T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BILINEAR),
+            T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BICUBIC),
             T.ToTensor(),
             T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ])
         self.raw_transform = T.Compose([
-            T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BILINEAR),
+            T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BICUBIC),
             T.ToTensor(),
         ])
 
@@ -149,7 +152,7 @@ class ResNet50FeatureExtractor:
             rgb = img[:, :, ::-1]
             # Resize directly via OpenCV (faster than PIL)
             if rgb.shape[0] != sz or rgb.shape[1] != sz:
-                rgb = cv2.resize(rgb, (sz, sz), interpolation=cv2.INTER_LINEAR)
+                rgb = cv2.resize(rgb, (sz, sz), interpolation=cv2.INTER_CUBIC)
             resized.append(rgb)
 
         # Stack to (B, H, W, 3) → contiguous
@@ -244,17 +247,25 @@ class ResNet50FeatureExtractor:
 
     # ─────────────── CNN Patch Builder ───────────────
     def _cnn_from_feats(self, feats: dict, batch_mode: bool = False):
-        pooled = []
+        # Old Version logic: Interpolate all layers to same spatial size
+        # BEFORE concat, then pool the concatenated result.
+        # This preserves spatial alignment across multi-scale features.
+        target_size = feats["layer2"].shape[2:]  # use layer2 as reference
+
+        parts = []
         for ln in self.LAYERS:
             f = feats[ln]
-            f = F.adaptive_avg_pool2d(f, (self.grid_size, self.grid_size))
-            pooled.append(f)
+            if f.shape[2:] != target_size:
+                f = F.interpolate(f, size=target_size, mode="bilinear", align_corners=False)
+            parts.append(f)
 
-        concat = torch.cat(pooled, dim=1)
+        concat = torch.cat(parts, dim=1)  # (B, sum_channels, H, W)
+        pooled = F.adaptive_avg_pool2d(concat, (self.grid_size, self.grid_size))
+
         if batch_mode:
-            B = concat.shape[0]
-            return concat.permute(0, 2, 3, 1).reshape(B, -1, self.cnn_dim)
-        return concat[0].permute(1, 2, 0).reshape(-1, self.cnn_dim)
+            B = pooled.shape[0]
+            return pooled.permute(0, 2, 3, 1).reshape(B, -1, self.cnn_dim)
+        return pooled[0].permute(1, 2, 0).reshape(-1, self.cnn_dim)
 
     # ─────────────── Color Patches (single — kept for extract()) ───────────────
     def _color_patches(self, raw: torch.Tensor) -> torch.Tensor:
@@ -272,6 +283,9 @@ class ResNet50FeatureExtractor:
              .permute(0, 2, 1, 3, 4)
              .reshape(-1, c, ph, pw)
         )
+
+        # Upcast to float32 for numerically stable mean/std/HSV
+        patches = patches.float()
 
         feats = []
         if self.use_color_features:
@@ -294,6 +308,9 @@ class ResNet50FeatureExtractor:
 
         Input:  (B, 3, H, W) — un-normalised [0, 1]
         Output: (B, grid², color_dim)
+
+        Note: Statistics (mean/std) and HSV conversion are computed in
+        float32 regardless of input dtype to avoid FP16 overflow/NaN.
         """
         B, c, h, w = raw.shape
         gs = self.grid_size
@@ -307,6 +324,9 @@ class ResNet50FeatureExtractor:
         x = x.unfold(2, ph, ph).unfold(3, pw, pw)
         # → (B, gs*gs, 3, ph, pw)
         x = x.contiguous().view(B, c, gs * gs, ph, pw).permute(0, 2, 1, 3, 4)
+
+        # Upcast to float32 for numerically stable mean/std/HSV
+        x = x.float()
 
         feats = []
         if self.use_color_features:
@@ -323,6 +343,11 @@ class ResNet50FeatureExtractor:
         out = torch.cat(feats, dim=2)          # (B, gs², color_dim)
         if self.color_weight != 1.0:
             out = out * self.color_weight
+
+        # Convert back to original dtype for concatenation with CNN features
+        if self.use_half:
+            out = out.half()
+
         return out
 
     # ─────────────── Branchless HSV (torch.where) ───────────────

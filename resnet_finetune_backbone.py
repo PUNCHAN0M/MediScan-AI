@@ -114,6 +114,22 @@ class CustomImageFolder(Dataset):
         return img, target
 
 
+class TransformSubset(Dataset):
+    """Pickle-safe subset wrapper that applies a dedicated transform."""
+
+    def __init__(self, subset, transform):
+        self.subset = subset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx):
+        path, label = self.subset.dataset.samples[self.subset.indices[idx]]
+        img = Image.open(path).convert("RGB")
+        return self.transform(img), label
+
+
 # =============================================================================
 #                         TRANSFORMS
 # =============================================================================
@@ -167,17 +183,8 @@ def build_datasets(data_dir: Path, img_size: int, val_split: float, seed: int = 
 
     torch.manual_seed(seed)
     train_ds, val_ds = random_split(raw_dataset, [n_train, n_val])
-    
-    # Apply val transform to validation subset
-    class TransformSubset(Dataset):
-        def __init__(self, subset, transform):
-            self.subset, self.transform = subset, transform
-        def __len__(self): return len(self.subset)
-        def __getitem__(self, idx):
-            path, label = self.subset.dataset.samples[self.subset.indices[idx]]
-            img = Image.open(path).convert("RGB")
-            return self.transform(img), label
-    
+
+    # Apply val transform to validation subset (pickle-safe class)
     val_ds_final = TransformSubset(val_ds, val_tf)
     print(f"\n  Train samples: {n_train}   Val samples: {n_val}")
     return train_ds, val_ds_final, num_classes
@@ -463,7 +470,11 @@ def main():
         
         # Different LR for backbone vs classifier head
         head_params = list(model.fc.parameters())
-        backbone_params = [p for p in model.parameters() if p.requires_grad and p not in head_params]
+        head_param_ids = {id(p) for p in head_params}
+        backbone_params = [
+            p for p in model.parameters()
+            if p.requires_grad and id(p) not in head_param_ids
+        ]
         
         optimizer = optim.AdamW([
             {"params": backbone_params, "lr": args.lr},
