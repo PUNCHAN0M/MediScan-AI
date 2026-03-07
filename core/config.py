@@ -56,15 +56,15 @@ class BackboneConfig:
     layers: tuple              = ("layer1", "layer2", "layer3")
     layer_channels: dict       = field(default_factory=lambda: {"layer1": 256, "layer2": 512, "layer3": 1024})
     grid_size: int             = 16
-    coreset_ratio: float       = 0.10
+    coreset_ratio: float       = 0.25
     coreset_min_keep: int      = 1_000
     coreset_max_keep: int      = 20_000
     k_nearest: int             = 3
-    score_method: str          = "top5_mean"
+    score_method: str          = "max"
     threshold_multiplier: float = 1.0
     fallback_threshold: float  = 0.50
-    use_color_features: bool   = False
-    use_hsv: bool              = False
+    use_color_features: bool   = True
+    use_hsv: bool              = True
     color_weight: float        = 1.0
     n_finetune_steps: int      = 601
 
@@ -82,7 +82,7 @@ class TrainConfig:
     """Training global settings."""
     seed: int                  = 42
     batch_size: int            = 32
-    selected_classes: tuple    = ()
+    selected_classes: tuple    = ("Androxsil",)
 
 
 # ─────────────────────────────────────────────────────────

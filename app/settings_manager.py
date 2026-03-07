@@ -37,7 +37,7 @@ _DEFAULTS: Dict[str, Any] = {
     "img_size": 256,
     "use_color": True,
     "use_hsv": True,
-    "color_weight": 1.5,
+    "color_weight": 1.0,
     "enable_layer1": True,
     "enable_layer2": True,
     "enable_layer3": True,

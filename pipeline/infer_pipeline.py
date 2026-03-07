@@ -45,14 +45,14 @@ class InspectorConfig:
     # backbone
     model_size: int                  = 256
     grid_size: int                   = 16
-    use_color_features: bool         = False
-    use_hsv: bool                    = False
+    use_color_features: bool         = True
+    use_hsv: bool                    = True
     color_weight: float              = 1.0
     backbone_path: Optional[str]     = None
 
     # scorer
     k_nearest: int                   = 3
-    score_method: str                = "top5_mean"
+    score_method: str                = "max"
     threshold_multiplier: float      = 1.0
 
     # crop
@@ -129,8 +129,8 @@ class InspectorConfig:
             pad=int(settings.get("seg_pad", 0)),
             model_size=int(settings.get("img_size", 256)),
             grid_size=int(settings.get("grid_size", 16)),
-            use_color_features=bool(settings.get("use_color", False)),
-            use_hsv=bool(settings.get("use_hsv", False)),
+            use_color_features=bool(settings.get("use_color", True)),
+            use_hsv=bool(settings.get("use_hsv", True)),
             color_weight=float(settings.get("color_weight", 1.0)),
             backbone_path=str(backbone_path) if backbone_path else None,
             k_nearest=int(settings.get("k_nearest", 3)),
