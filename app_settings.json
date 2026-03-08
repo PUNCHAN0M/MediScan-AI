@@ -2,7 +2,7 @@
   "backbone_model": "weights\\backbone\\resnet_last.pth",
   "segmentation_model": "weights\\detection\\pill-detection-best-2.onnx",
   "detection_model": "weights\\detection\\pill-detection-best-2.onnx",
-  "seg_conf": 0.5,
+  "seg_conf": 0.65,
   "seg_iou": 0.5499999999999999,
   "seg_pad": 0,
   "seg_img_size": 512,

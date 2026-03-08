@@ -84,7 +84,7 @@ class TrainConfig:
     """Training global settings."""
     seed: int                  = 42
     batch_size: int            = 32
-    selected_classes: tuple    = ("Bestatin20",)
+    selected_classes: tuple    = ()
 
 
 # ─────────────────────────────────────────────────────────

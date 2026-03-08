@@ -47,6 +47,20 @@ def main():
     inspector_cfg = InspectorConfig.from_settings(settings.all(), compare_classes)
     inspector_cfg.device = device
 
+    # Align with pill_collect runtime profile for fair comparison
+    # (keep tracking ON here because predict scoring needs stable per-pill IDs)
+    inspector_cfg.conf = 0.25
+    inspector_cfg.iou = 0.6
+    inspector_cfg.img_size = 1280
+    inspector_cfg.pad = 5
+
+    print(
+        "[PredictProfile] pill_collect-like: "
+        f"conf={inspector_cfg.conf} iou={inspector_cfg.iou} "
+        f"img_size={inspector_cfg.img_size} pad={inspector_cfg.pad} zoom=1.5 "
+        "tracking=ON"
+    )
+
     inspector = PillInspector(inspector_cfg)
 
     run_camera(
@@ -55,6 +69,7 @@ def main():
         camera_index=int(settings.get("camera_index", 0)),
         save_dir=None,
         window_name="Pill Inspector",
+        zoom=1.5,
         show_model_input_window=bool(args.show_model_input),
         show_morph_stage=bool(args.show_morph_stage),
     )

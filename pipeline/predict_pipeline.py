@@ -97,7 +97,7 @@ def _score_label(status_info: Optional[Dict[str, Any]]) -> str:
 def build_model_input_grid(
     infos: List[Dict[str, Any]],
     scored: Dict[int, Dict[str, Any]],
-    cell_size: int = 100,
+    cell_size: int = 150,
     max_cols: int = 6,
     show_morph_stage: bool = True,
 ) -> Optional[np.ndarray]:
@@ -138,7 +138,7 @@ def build_model_input_grid(
         cell = cv2.resize(cell, (cell_size, cell_size), interpolation=cv2.INTER_LINEAR)
         grid[y + label_h:y + label_h + cell_size, x:x + cell_size] = cell
 
-        label = f"ID:{tid} {_score_label(status_info)}"
+        label = f"{tid} {_score_label(status_info)}"
         cv2.putText(
             grid,
             label,
@@ -448,8 +448,8 @@ def run_camera(
                 pre_model_grid = build_model_input_grid(
                     infos=infos,
                     scored=scored,
-                    cell_size=100,
-                    max_cols=6,
+                    cell_size=150,
+                    max_cols=8,
                     show_morph_stage=show_morph_stage,
                 )
                 if pre_model_grid is not None:

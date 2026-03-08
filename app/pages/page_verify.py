@@ -55,7 +55,7 @@ def _enum_cameras(max_test: int = 5) -> list[int]:
     return available or [0]
 
 
-def _digital_zoom(frame: np.ndarray, zoom: float = 1.2) -> np.ndarray:
+def _digital_zoom(frame: np.ndarray, zoom: float = 1.5) -> np.ndarray:
     if zoom <= 1.0:
         return frame
     h, w = frame.shape[:2]
@@ -529,12 +529,24 @@ class VerifyPage(QWidget):
                 settings_dict, compare_classes=list(classes),
             )
             config.device = get_device()
+
+            # Match main.py predict profile (pill_collect-like runtime)
+            config.conf = 0.25
+            config.iou = 0.6
+            config.img_size = 1280
+            config.pad = 5
+
             self._inspector = PillInspector(config)
             print(
                 f"[VerifyPage] Inspector loaded: "
                 f"YOLO={config.yolo_model_path} | "
                 f"backbone={config.backbone_path} | "
-                f"img_size={config.img_size} conf={config.conf} iou={config.iou}"
+                f"img_size={config.img_size} conf={config.conf} iou={config.iou} "
+                f"pad={config.pad} zoom=1.5"
+            )
+            print(
+                "[VerifyPage] Morphology: mask -> MORPH_CLOSE -> MORPH_OPEN -> blur -> threshold "
+                "(same YOLODetector as main.py predict)"
             )
         except Exception as e:
             print(f"[VerifyPage] Failed to load inspector: {e}")
@@ -549,7 +561,7 @@ class VerifyPage(QWidget):
         ok, frame = self._cap.read()
         if not ok:
             return
-        frame = _digital_zoom(frame, zoom=1.2)
+        frame = _digital_zoom(frame, zoom=1.5)
 
         count = 0
         normal_count = 0

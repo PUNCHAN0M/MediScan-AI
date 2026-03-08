@@ -1,0 +1,2468 @@
+config\base.py
+```
+"""
+Base Configuration for MediScan-AI
+==================================
+
+การตั้งค่าพื้นฐานที่ใช้ร่วมกันทุก backbone models.
+สำหรับการตั้งค่าเฉพาะแต่ละ model ดูที่:
+- config/mobilenet.py
+- config/resnet.py  
+- config/dinov2.py
+"""
+from pathlib import Path
+
+
+# =============================================================================
+#                              PATH CONFIGURATION
+# =============================================================================
+
+# Data directories
+DATA_ROOT = Path("D:\project\Medicine-AI\MediScan-AI\data_train_defection")
+SAVE_DIR = Path("./data/inspected")
+BAD_DIR = "calibrate-bad/"
+
+# YOLO model paths
+# SEGMENTATION_MODEL_PATH = "model/yolo12-seg.pt"
+# DETECTION_MODEL_PATH = "model/yolo12-seg.pt"
+DETECTION_MODEL_PATH = "model/SEGMENTATION/pill-detection-best-2.pt"
+SEGMENTATION_MODEL_PATH = "model/SEGMENTATION/pill-detection-best-2.pt"
+
+# =============================================================================
+#                           TRAINING CONFIGURATION
+# =============================================================================
+
+# Random seed for reproducibility
+SEED = 42
+
+# Supported image extensions
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
+
+# Classes to train (empty list = train all available classes)
+SELECTED_CLASSES = [
+
+
+]
+
+
+# =============================================================================
+#                          PREDICTION CONFIGURATION
+# =============================================================================
+
+# Camera settings
+CAMERA_INDEX = 0
+FRAMES_BEFORE_SUMMARY = 3
+WINDOW_NAME = "Pill Inspector"
+
+# Classes to compare during prediction
+COMPARE_CLASSES = [
+    "Androxsil",
+    # "ANTA1mg",
+    # "Baclofen",
+    # "Bestatin20",
+    # "CANDY",
+    # "Clozapine25mg",
+    # "DiclofenacSodium50mg",
+    # "DILIZEM",
+    # "Exelon45mg",
+    # "Fahtaliejone",
+    # "Flunarizine5mg",
+    # "Flupentixol05mg",
+    # "Glipizide",
+    # "green_circle",
+    # "ISOTRATE",
+    # "JANUMET_back",
+    # "JANUMET_front",
+    # "Lanzaar50",
+    # "line",
+    # "LOSARTAN_POTASSIUM50mg",
+    # "NOXA20",
+    # "panadol",
+    # "paracap",
+    # "pink_circle",
+    # "Pregabalin25mg",
+    # "Quetiepine25mg",
+    # "sara",
+    # "SITAGTIN-100",
+    # "tiffy_back",
+    # "tiffy_front",
+    # "TOP",
+    # "Trazodel",
+    # "TURMERICCAPSULE",
+    # "ULTRACET",
+    # "vitaminc",
+    # "white_oval",
+    # "white_smaill_circle",
+    # "XELJANZ5mg",
+    # "yellow_circle",
+    # "ZYMRON15",
+]
+
+
+# =============================================================================
+#                              DEFAULT THRESHOLDS
+# =============================================================================
+
+# Default fallback threshold if calibration fails
+DEFAULT_FALLBACK_THRESHOLD = 0.50
+
+```
+config\resnet.py
+```
+"""
+ResNet50 PatchCore Configuration
+================================
+
+Backbone : ResNet50 (pretrained, frozen)
+Layers   : layer2 (512 ch) + layer3 (1024 ch) → concat → 1536-dim patches
+Detection: YOLOv12-seg (.pt / .onnx)
+
+Best for:
+- Color anomaly detection (white vs black pills)
+- Small coloured defects (black spots, discolouration)
+- Pills with colour-based quality criteria
+
+Performance:
+- Speed:   Fast  (ResNet50 + FAISS kNN, no backprop)
+- Texture: ★★★★
+- Color:   ★★★★★
+- Shape:   ★★★★
+"""
+from pathlib import Path
+from config.base import DEFAULT_FALLBACK_THRESHOLD
+
+
+# =============================================================================
+#  BACKBONE
+# =============================================================================
+BACKBONE = "model/backbone/resnet_last.pth"  #"None"
+LAYERS = ["layer1", "layer2", "layer3"]          # 512 + 1024 = 1536 dim/patch
+
+
+# =============================================================================
+#  IMAGE / PATCH
+# =============================================================================
+IMG_SIZE = 256                          # input resolution
+GRID_SIZE = 16                          # patches per side  (16 → 256 patches)
+
+
+# =============================================================================
+#  PATCHCORE
+# =============================================================================
+CORESET_RATIO = 0.25                    # fraction of patches to keep
+K_NEAREST = 1                           # kNN neighbours for scoring
+
+
+# =============================================================================
+#  THRESHOLD
+# =============================================================================
+FALLBACK_THRESHOLD = DEFAULT_FALLBACK_THRESHOLD
+
+
+# =============================================================================
+#  SCORING
+# =============================================================================
+SCORE_METHOD = "top5_mean"              # "max" (sensitive) | "top5_mean" (balanced)
+# Multiplier applied to the calibrated threshold at inference.
+# 1.0 = trust calibration exactly.  > 1.0 = more lenient.  Tune without retraining.
+THRESHOLD_MULTIPLIER = 1
+
+
+# =============================================================================
+#  COLOR FEATURES  (optional, appended to CNN features)
+# =============================================================================
+USE_COLOR_FEATURES = True               # +6 dims (RGB mean/std)
+USE_HSV = True                          # +6 dims (HSV mean/std)
+COLOR_WEIGHT = 1.5                      # keep colour influence mild (was 1.0)
+
+
+# =============================================================================
+#  MODEL OUTPUT
+# =============================================================================
+MODEL_OUTPUT_DIR = Path("./model/patchcore_resnet")
+
+```
+Core_ResnetPatchCore\core_predict\inspector.py
+```
+"""Backward-compatibility shim — ``run_predict.py`` imports from here."""
+from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
+
+# run_predict.py looks for PillInspectorSIFE
+PillInspectorSIFE = PillInspector
+PillInspectorResNet = PillInspector
+
+__all__ = ["PillInspector", "PillInspectorSIFE", "PillInspectorResNet",
+           "InspectorConfig"]
+
+```
+Core_ResnetPatchCore\patchcore\feature_extractor.py
+```
+"""
+ResNet50 Feature Extractor
+==========================
+
+Multi-layer patch feature extraction from pretrained ResNet50.
+
+Architecture
+------------
+::
+
+    input 256×256
+        ↓
+    ResNet50 (frozen)
+        ├── layer2  →  [B, 512,  32, 32]
+        └── layer3  →  [B, 1024, 16, 16]
+               ↓ upsample to 32×32
+        concat →  [B, 1536, 32, 32]
+        adaptive_avg_pool2d  →  [B, 1536, grid, grid]
+        flatten  →  [B × grid², 1536]
+
+Optional color features (appended per patch):
+    +6  RGB mean/std
+    +6  HSV mean/std
+
+Single image  → ``extract(pil_image) → (grid², D)``
+Batch images  → ``extract_batch(list_of_bgr) → list[(grid², D)]``
+"""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
+import torchvision.transforms as T
+from PIL import Image
+from typing import List, Optional
+
+
+class ResNet50FeatureExtractor:
+    """
+    Frozen ResNet50 backbone → multi-layer patch features.
+
+    Parameters
+    ----------
+    img_size : int
+        Input image resolution (default 256).
+    grid_size : int
+        Number of patches per side.  Total patches = grid × grid (default 16 → 256).
+    device : str or None
+        ``"cuda"`` / ``"cpu"`` (auto-detect if ``None``).
+    use_color_features : bool
+        Append per-patch RGB mean/std (+6 dims).
+    use_hsv : bool
+        Append per-patch HSV mean/std (+6 dims).
+    color_weight : float
+        Scale factor for color dims (1.0 = same scale as CNN features).
+    backbone_path : str or None
+        Path to a custom ``.pth`` backbone weights file.  When provided the
+        ImageNet pretrained weights are NOT loaded; instead the state-dict
+        (or a checkpoint containing ``"state_dict"`` / ``"model"`` key) is
+        loaded from this file.  Useful for domain-finetuned backbones such as
+        ``resnet_backbone.pth``.
+    """
+
+    # backbone layers to hook
+    LAYERS = ("layer1", "layer2", "layer3")  # เดิม: ("layer2", "layer3")
+    LAYER_CHANNELS = {"layer1": 256, "layer2": 512, "layer3": 1024}  # ✅ เพิ่ม layer1: 256
+  
+    def __init__(
+        self,
+        img_size: int = 256,
+        grid_size: int = 16,
+        device: Optional[str] = None,
+        use_color_features: bool = False,
+        use_hsv: bool = False,
+        color_weight: float = 1.0,
+        backbone_path: Optional[str] = None,
+    ):
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.img_size = img_size
+        self.grid_size = grid_size
+        self.use_color_features = use_color_features
+        self.use_hsv = use_hsv
+        self.color_weight = color_weight
+        self.backbone_path = backbone_path
+
+        # ── backbone ──
+        if backbone_path:
+            print(f"[FeatureExtractor] Loading custom backbone from: {backbone_path}")
+            self.backbone = models.resnet50(weights=None)
+            state = torch.load(backbone_path, map_location="cpu")
+            
+            # support raw state_dict or checkpoint dicts
+            if isinstance(state, dict):
+                for key in ("state_dict", "model", "full_state_dict", "features_state_dict"):
+                    if key in state:
+                        print(f"[FeatureExtractor] Using key '{key}' from checkpoint")
+                        state = state[key]
+                        break
+            
+            # ✅ FIX: Remove fc layer weights (we only use backbone features for PatchCore)
+            state = {k: v for k, v in state.items() if not k.startswith('fc.')}
+            print(f"[FeatureExtractor] Removed fc layer from checkpoint")
+            
+            missing, unexpected = self.backbone.load_state_dict(state, strict=False)
+            if missing:
+                print(f"[FeatureExtractor] Missing keys ({len(missing)}): {missing[:5]} ...")
+            if unexpected:
+                print(f"[FeatureExtractor] Unexpected keys ({len(unexpected)}): {unexpected[:5]} ...")
+        else:
+            self.backbone = models.resnet50(weights="IMAGENET1K_V1")
+
+        self.backbone = self.backbone.to(self.device).eval()
+        for p in self.backbone.parameters():
+            p.requires_grad = False
+
+        self._act: dict = {}
+        self._register_hooks()
+
+        # ── dimensions ──
+        self.cnn_dim = sum(self.LAYER_CHANNELS[l] for l in self.LAYERS)  # ✅ 256+512+1024 = 1808
+        self.color_dim = 0
+        if use_color_features:
+            self.color_dim += 6
+        if use_hsv:
+            self.color_dim += 6
+        self.feature_dim = self.cnn_dim + self.color_dim  # ✅ 1808 หรือ 1820 ถ้ามี color
+        
+        # ── transforms ──
+        self.transform = T.Compose([
+            T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BICUBIC),
+            T.ToTensor(),
+            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        self.raw_transform = T.Compose([
+            T.Resize((img_size, img_size), interpolation=T.InterpolationMode.BICUBIC),
+            T.ToTensor(),
+        ])
+
+        backbone_label = backbone_path if backbone_path else "ImageNet pretrained"
+        print(
+            f"[FeatureExtractor] ResNet50 | backbone={backbone_label} | grid={grid_size} | "
+            f"cnn={self.cnn_dim} color={self.color_dim} total={self.feature_dim}"
+        )
+
+    # ─────────────────── hooks ───────────────────
+    def _register_hooks(self) -> None:
+        def make_hook(name: str):
+            def hook(_, __, out):
+                self._act[name] = out.detach()
+            return hook
+
+        for ln in self.LAYERS:
+            layer = dict(self.backbone.named_modules())[ln]
+            layer.register_forward_hook(make_hook(ln))
+
+    # ─────────────────── single image ───────────────────
+    @torch.no_grad()
+    def extract(self, image: Image.Image) -> np.ndarray:
+        """
+        Extract patch features from one PIL image.
+
+        Returns
+        -------
+        np.ndarray  (grid², feature_dim)
+        """
+        x = self.transform(image).unsqueeze(0).to(self.device)
+        self.backbone(x)
+
+        patches = self._cnn_patches()  # (grid², cnn_dim)
+
+        if self.use_color_features or self.use_hsv:
+            x_raw = self.raw_transform(image).unsqueeze(0).to(self.device)
+            color = self._color_patches(x_raw)  # (grid², color_dim)
+            patches = torch.cat([patches, color], dim=1)
+
+        return patches.cpu().numpy()
+
+    def extract_from_numpy(self, bgr: np.ndarray) -> Optional[np.ndarray]:
+        """Extract from OpenCV BGR image."""
+        if bgr is None or bgr.size == 0:
+            return None
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        return self.extract(Image.fromarray(rgb))
+
+    # ─────────────────── batch ───────────────────
+    @torch.no_grad()
+    def extract_batch(self, images: List[np.ndarray]) -> List[np.ndarray]:
+        """
+        Batch feature extraction — stack pills → one ResNet50 forward.
+
+        Parameters
+        ----------
+        images : list of BGR ``np.ndarray``
+
+        Returns
+        -------
+        list of ``np.ndarray``  each ``(grid², feature_dim)``
+        """
+        if not images:
+            return []
+
+        pil_imgs = [Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                     for img in images]
+        batch = torch.stack([self.transform(p) for p in pil_imgs]).to(self.device)
+
+        self.backbone(batch)
+
+        # ── gather CNN features for whole batch ──
+        target_h, target_w = self._act["layer2"].shape[2:]
+        feats = []
+        for ln in self.LAYERS:
+            f = self._act[ln]
+            if f.shape[2:] != (target_h, target_w):
+                f = F.interpolate(f, size=(target_h, target_w),
+                                  mode="bilinear", align_corners=False)
+            feats.append(f)
+
+        concat = torch.cat(feats, dim=1)                          # (B, 1536, H', W')
+        pooled = F.adaptive_avg_pool2d(concat,
+                                       (self.grid_size, self.grid_size))
+        # pooled: (B, 1536, grid, grid)
+
+        results: List[np.ndarray] = []
+        need_color = self.use_color_features or self.use_hsv
+
+        if need_color:
+            raw_batch = torch.stack(
+                [self.raw_transform(p) for p in pil_imgs]
+            ).to(self.device)
+
+        for i in range(len(images)):
+            cnn = (pooled[i]
+                   .permute(1, 2, 0)
+                   .reshape(-1, self.cnn_dim))   # (grid², 1536)
+
+            if need_color:
+                col = self._color_patches(raw_batch[i:i+1])  # (grid², color_dim)
+                out = torch.cat([cnn, col], dim=1)
+            else:
+                out = cnn
+
+            results.append(out.cpu().numpy())
+
+        return results
+
+    # ─────────────────── CNN patch helper ───────────────────
+    def _cnn_patches(self) -> torch.Tensor:
+        """
+        Combine layer2 + layer3 → pooled → flat patches for the *last*
+        forward pass (single-image or use index 0).
+
+        Returns (grid², cnn_dim) tensor on device.
+        """
+        target_size = self._act["layer2"].shape[2:]  # (H/8, W/8)
+
+        parts = []
+        for ln in self.LAYERS:
+            f = self._act[ln]
+            if f.shape[2:] != target_size:
+                f = F.interpolate(f, size=target_size,
+                                  mode="bilinear", align_corners=False)
+            parts.append(f)
+
+        concat = torch.cat(parts, dim=1)              # (1, 1536, H', W')
+        pooled = F.adaptive_avg_pool2d(
+            concat, (self.grid_size, self.grid_size))  # (1, 1536, g, g)
+
+        return (pooled[0]
+                .permute(1, 2, 0)
+                .reshape(-1, self.cnn_dim))             # (g², 1536)
+
+    # ─────────────────── color patch helper ───────────────────
+    def _color_patches(self, raw: torch.Tensor) -> torch.Tensor:
+        """
+        Per-patch color statistics from un-normalised image tensor.
+
+        Parameters
+        ----------
+        raw : (1, 3, H, W) tensor [0, 1]
+
+        Returns
+        -------
+        (grid², color_dim) tensor on device
+        """
+        _, c, h, w = raw.shape
+        ph = h // self.grid_size
+        pw = w // self.grid_size
+
+        x = raw[:, :, :ph * self.grid_size, :pw * self.grid_size]
+        # unfold into patches
+        patches = (x.unfold(2, ph, ph)
+                    .unfold(3, pw, pw)
+                    .contiguous()
+                    .view(1, c, self.grid_size * self.grid_size, ph, pw)
+                    .permute(0, 2, 1, 3, 4)
+                    .reshape(-1, c, ph, pw))  # (n_patches, 3, ph, pw)
+
+        feats: list = []
+
+        # RGB mean / std
+        if self.use_color_features:
+            feats.append(patches.mean(dim=(2, 3)))   # (n, 3)
+            feats.append(patches.std(dim=(2, 3)))    # (n, 3)
+
+        # HSV mean / std
+        if self.use_hsv:
+            hsv = self._rgb_to_hsv(patches)
+            feats.append(hsv.mean(dim=(2, 3)))
+            feats.append(hsv.std(dim=(2, 3)))
+
+        out = torch.cat(feats, dim=1)
+        if self.color_weight != 1.0:
+            out = out * self.color_weight
+
+        return out
+
+    # ─────────────────── RGB → HSV ───────────────────
+    @staticmethod
+    def _rgb_to_hsv(rgb: torch.Tensor) -> torch.Tensor:
+        """Batch RGB [0,1] → HSV [0,1]."""
+        r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+        mx, argmx = rgb.max(dim=1)
+        mn = rgb.min(dim=1)[0]
+        diff = mx - mn
+
+        v = mx
+        s = torch.zeros_like(mx)
+        pos = mx > 0
+        s[pos] = diff[pos] / mx[pos]
+
+        h = torch.zeros_like(mx)
+        d_pos = diff > 0
+
+        m_r = (argmx == 0) & d_pos
+        h[m_r] = ((g[m_r] - b[m_r]) / diff[m_r] / 6.0) % 1.0
+
+        m_g = (argmx == 1) & d_pos
+        h[m_g] = (b[m_g] - r[m_g]) / diff[m_g] / 6.0 + 1.0 / 3.0
+
+        m_b = (argmx == 2) & d_pos
+        h[m_b] = (r[m_b] - g[m_b]) / diff[m_b] / 6.0 + 2.0 / 3.0
+
+        h = h % 1.0
+        return torch.stack([h, s, v], dim=1)
+
+```
+Core_ResnetPatchCore\patchcore\memory_bank.py
+```
+"""
+Memory Bank + Coreset Sampling
+==============================
+
+Accumulate patch features → coreset subsample → L2 normalize → save / load.
+
+Usage
+-----
+::
+
+    bank = MemoryBank()
+    for img in good_images:
+        patches = extractor.extract(img)   # (grid², D)
+        bank.add(patches)
+
+    bank.build(coreset_ratio=0.10)         # → ~15 k–20 k patches
+    bank.save("model/patchcore_resnet/cls.pth", meta={...})
+
+    # later
+    array, meta = MemoryBank.load("model/patchcore_resnet/cls.pth")
+"""
+from __future__ import annotations
+
+import faiss
+import numpy as np
+import torch
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
+
+
+# ─────────────────────────────────────────────────────────
+#  Coreset Sampler
+# ─────────────────────────────────────────────────────────
+class CoresetSampler:
+    """Random coreset subsampling for a patch bank."""
+
+    @staticmethod
+    def subsample(
+        bank: np.ndarray,
+        ratio: float = 0.10,
+        seed: int = 42,
+        min_keep: int = 1_000,
+        max_keep: int = 20_000,
+    ) -> np.ndarray:
+        """
+        Randomly keep *ratio* of patches.
+
+        Target patch count ≈ 15 k–20 k  (max_keep).
+        If the bank is already ≤ *min_keep* patches, return as-is.
+        """
+        n = bank.shape[0]
+        if n <= min_keep:
+            return bank
+
+        n_sel = int(n * ratio)
+        n_sel = max(min_keep, min(n_sel, max_keep, n))
+
+        rng = np.random.default_rng(seed)
+        idx = rng.choice(n, size=n_sel, replace=False)
+        return np.ascontiguousarray(bank[idx])
+
+
+# ─────────────────────────────────────────────────────────
+#  Memory Bank
+# ─────────────────────────────────────────────────────────
+class MemoryBank:
+    """
+    PatchCore memory bank.
+
+    Lifecycle
+    ---------
+    ``add()`` → ``build()`` → ``save()``
+
+    ``load()`` returns a raw numpy array + metadata dict.
+    """
+
+    def __init__(self) -> None:
+        self._patches: list[np.ndarray] = []
+        self._bank: Optional[np.ndarray] = None
+        self._built = False
+
+    # ── accumulate ──
+    def add(self, patches: np.ndarray) -> None:
+        """Append patches from one pill / image."""
+        if patches is not None and patches.shape[0] > 0:
+            self._patches.append(patches.astype(np.float32))
+
+    # ── properties ──
+    @property
+    def total_patches(self) -> int:
+        if self._built:
+            return self._bank.shape[0] if self._bank is not None else 0
+        return sum(p.shape[0] for p in self._patches)
+
+    @property
+    def feature_dim(self) -> int:
+        if self._built and self._bank is not None:
+            return self._bank.shape[1]
+        if self._patches:
+            return self._patches[0].shape[1]
+        return 0
+
+    @property
+    def bank(self) -> Optional[np.ndarray]:
+        return self._bank
+
+    # ── build ──
+    def build(
+        self,
+        coreset_ratio: float = 0.10,
+        seed: int = 42,
+        min_keep: int = 1_000,
+        max_keep: int = 20_000,
+    ) -> np.ndarray:
+        """
+        Concat → coreset subsample → L2 normalize.
+
+        Returns the finalized ``(N, D)`` memory bank.
+        """
+        if not self._patches:
+            raise ValueError("No patches added — call add() first")
+
+        raw = np.concatenate(self._patches, axis=0).astype(np.float32)
+        raw = np.ascontiguousarray(raw)
+        print(f"  Raw patches : {raw.shape[0]:,} × {raw.shape[1]}")
+
+        bank = CoresetSampler.subsample(raw, coreset_ratio, seed,
+                                        min_keep, max_keep)
+        print(f"  After coreset (ratio={coreset_ratio}): {bank.shape[0]:,}")
+
+        faiss.normalize_L2(bank)
+
+        self._bank = bank
+        self._built = True
+        return bank
+
+    # ── save / load ──
+    def save(
+        self,
+        path: Path | str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Save ``memory_bank`` tensor + metadata to ``.pth``."""
+        if self._bank is None:
+            raise ValueError("Call build() before save()")
+
+        data: Dict[str, Any] = {
+            "memory_bank": torch.from_numpy(self._bank),
+            "dim": int(self._bank.shape[1]),
+            "n_patches": int(self._bank.shape[0]),
+        }
+        if metadata:
+            data.update(metadata)
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(data, str(path))
+        print(f"  Saved → {path}")
+
+    @staticmethod
+    def load(path: Path | str) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        Load memory bank from ``.pth``.
+
+        Returns
+        -------
+        bank : np.ndarray  (N, D) float32
+        meta : dict         all remaining keys (threshold, backbone, …)
+        """
+        data = torch.load(str(path), map_location="cpu", weights_only=False)
+        bank = data["memory_bank"]
+        if isinstance(bank, torch.Tensor):
+            bank = bank.numpy()
+        bank = np.ascontiguousarray(bank.astype(np.float32))
+
+        meta = {k: v for k, v in data.items() if k != "memory_bank"}
+        return bank, meta
+
+```
+Core_ResnetPatchCore\patchcore\scorer.py
+```
+"""
+PatchCore Scorer
+================
+
+FAISS-based kNN anomaly scoring.
+
+Score computation
+-----------------
+1. L2-normalize query patches
+2. Search against ``IndexFlatIP`` (cosine similarity via inner product)
+3. ``score_per_patch = 1 − mean(top-k similarity)``
+4. ``score_per_pill  = max(patch_scores)``  *or*  ``top-1 % mean``
+"""
+from __future__ import annotations
+
+import cv2
+import faiss
+import numpy as np
+from typing import Optional
+
+
+class PatchCoreScorer:
+    """
+    Anomaly scorer backed by a FAISS ``IndexFlatIP``.
+
+    Parameters
+    ----------
+    k_nearest : int
+        Number of nearest neighbours used for scoring.
+    """
+
+    def __init__(self, k_nearest: int = 3):
+        self.k = k_nearest
+        self._index: Optional[faiss.Index] = None
+
+    # ── build ──
+    def build_index(self, memory_bank: np.ndarray) -> faiss.Index:
+        """
+        Build FAISS inner-product index from an L2-normalised bank.
+
+        Returns the index (also stored internally).
+        """
+        bank = np.ascontiguousarray(memory_bank.astype(np.float32))
+        faiss.normalize_L2(bank)
+
+        d = bank.shape[1]
+        index = faiss.IndexFlatIP(d)
+        index.add(bank)
+
+        self._index = index
+        return index
+
+    # ── per-patch ──
+    def score_patches(
+        self,
+        patches: np.ndarray,
+        index: Optional[faiss.Index] = None,
+    ) -> np.ndarray:
+        """
+        Per-patch anomaly scores.
+
+        Returns ``(N_patches,)`` array — higher = more anomalous.
+        """
+        idx = index or self._index
+        if idx is None:
+            raise ValueError("No FAISS index — call build_index() first")
+
+        patches = np.ascontiguousarray(patches.astype(np.float32))
+        faiss.normalize_L2(patches)
+
+        sim, _ = idx.search(patches, self.k)
+        return 1.0 - np.mean(sim, axis=1)
+
+    # ── per-pill ──
+    def score_pill(
+        self,
+        patches: np.ndarray,
+        index: Optional[faiss.Index] = None,
+        method: str = "max",
+    ) -> float:
+        """
+        Single anomaly score for one pill.
+
+        Parameters
+        ----------
+        method : ``"max"`` | ``"top1_mean"`` | ``"top5_mean"``
+            ``max``       — maximum patch score (standard PatchCore, sensitive).
+            ``top1_mean`` — mean of the top 1 % patches  (~2 of 256).
+            ``top5_mean`` — mean of the top 5 % patches  (~13 of 256).
+                            Best balance: robust against single-patch noise
+                            yet still catches localised defects.
+        """
+        if patches is None or patches.shape[0] == 0:
+            return 0.0
+
+        scores = self.score_patches(patches, index)
+
+        if method == "top1_mean":
+            k = max(1, int(len(scores) * 0.01))
+            return float(np.sort(scores)[-k:].mean())
+
+        if method == "top5_mean":
+            k = max(1, int(len(scores) * 0.05))
+            return float(np.sort(scores)[-k:].mean())
+        if method == "top10_mean":
+            k = max(1, int(len(scores) * 0.10))
+            return float(np.sort(scores)[-k:].mean())
+        return float(scores.max())
+
+    # ── heatmap ──
+    def score_heatmap(
+        self,
+        patches: np.ndarray,
+        grid_size: int,
+        image_size: tuple = (256, 256),
+        index: Optional[faiss.Index] = None,
+    ) -> np.ndarray:
+        """
+        Anomaly heatmap resized to *image_size*.
+
+        Returns float32 (H, W) array.
+        """
+        scores = self.score_patches(patches, index)
+        hm = scores.reshape(grid_size, grid_size).astype(np.float32)
+        return cv2.resize(hm, (image_size[1], image_size[0]),
+                          interpolation=cv2.INTER_LINEAR)
+
+```
+Core_ResnetPatchCore\pipeline\infer.py
+```
+"""
+Inference Pipeline
+==================
+
+Folder-based and realtime pill inspection.
+
+Classes
+-------
+``InspectorConfig``
+    Dataclass with all tuneable knobs.
+``PillInspector``
+    Main façade — detect → crop → extract → score → classify.
+
+Output format
+-------------
+::
+
+    {
+        "count": 50,
+        "bad_count": 3,
+        "bad_pills":  [{"bbox": [x1,y1,x2,y2], "score": 0.87, …}, …],
+        "good_count": 47,
+        "good_pills": [{"bbox": [x1,y1,x2,y2], "score": 0.12, …}, …],
+    }
+
+Realtime flow
+-------------
+::
+
+    frame → classify_anomaly() → preview image  (repeat N frames)
+    → summarize() → JSON result with majority vote
+"""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+import torch
+import faiss
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from Core_ResnetPatchCore.segmentation.yolo_infer import YOLOSegmentor
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
+from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
+from Core_ResnetPatchCore.pipeline.visualizer import draw_pill_results, draw_summary
+
+
+# ─────────────────────────────────────────────────────────
+#  Configuration
+# ─────────────────────────────────────────────────────────
+@dataclass
+class InspectorConfig:
+    """All tuneable knobs for PillInspector."""
+
+    # classes to compare each pill against (from config/base.py)
+    compare_classes: List[str] = field(default_factory=list)
+    model_dir: Path = field(
+        default_factory=lambda: Path("./model/patchcore_resnet"))
+
+    # ── YOLO ──
+    yolo_model_path: str = "model/pill-detection-best-2.pt"
+    yolo_det_model_path: Optional[str] = None   # unused, kept for compat
+    img_size: int = 512
+    conf: float = 0.5
+    iou: float = 0.6
+    pad: int = 5
+
+    # ── feature extractor ──
+    model_size: int = 256
+    grid_size: int = 16
+    use_color_features: bool = False
+    use_hsv: bool = False
+    color_weight: float = 0.3          # keep colour influence mild
+
+    # ── scoring ──
+    k_nearest: int = 3
+    score_method: str = "top5_mean"   # "max" | "top1_mean" | "top5_mean | "top10_mean" (balanced)
+    threshold_multiplier: float = 1  # small buffer above calibrated thr
+
+    # ── backbone ──
+    backbone_path: Optional[str] = None      # custom .pth backbone
+
+    # ── crop ──
+    crop_size: int = 256
+    bg_value: int = 0
+
+    # ── tracking (realtime) ──
+    track_max_distance: float = 80.0
+    track_iou_threshold: float = 0.80
+    track_max_age: int = 10
+    merge_dist_px: int = 60
+
+    # ── voting ──
+    frames_before_summary: int = 3
+
+    device: Optional[str] = None
+
+    def __post_init__(self):
+        if self.device is None:
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model_dir = Path(self.model_dir)
+
+
+# ─────────────────────────────────────────────────────────
+#  PillInspector
+# ─────────────────────────────────────────────────────────
+class PillInspector:
+    """
+    Main pill anomaly inspector.
+
+    Supports **both** camera (frame-by-frame) and folder-based prediction.
+
+    Multi-class comparison
+    ~~~~~~~~~~~~~~~~~~~~~~
+    Each pill is compared against every class in ``compare_classes``.
+    If **any** class scores ≤ its threshold → pill is **NORMAL**.
+    """
+
+    def __init__(self, config: Optional[InspectorConfig] = None):
+        self.config = config or InspectorConfig()
+        self._init_components()
+        self._init_state()
+
+    # ─────────────────── init ───────────────────
+    def _init_components(self) -> None:
+        cfg = self.config
+
+        # YOLO segmentor (supports .pt + .onnx)
+        self._segmentor = YOLOSegmentor(
+            model_path=cfg.yolo_model_path,
+            img_size=cfg.img_size,
+            conf=cfg.conf,
+            iou=cfg.iou,
+            device=cfg.device,
+            enable_tracking=True,
+            track_max_distance=cfg.track_max_distance,
+            track_iou_threshold=cfg.track_iou_threshold,
+            track_max_age=cfg.track_max_age,
+        )
+
+        # ResNet50 feature extractor
+        self._extractor = ResNet50FeatureExtractor(
+            img_size=cfg.model_size,
+            grid_size=cfg.grid_size,
+            device=cfg.device,
+            use_color_features=cfg.use_color_features,
+            use_hsv=cfg.use_hsv,
+            color_weight=cfg.color_weight,
+            backbone_path=cfg.backbone_path,
+        )
+
+        # scorer
+        self._scorer = PatchCoreScorer(k_nearest=cfg.k_nearest)
+
+        # lazy-loaded per-class FAISS indices
+        self._indices: Dict[str, faiss.Index] = {}
+        self._thresholds: Dict[str, float] = {}
+        self._subclass_map: Dict[str, List[str]] = {}
+
+    def _init_state(self) -> None:
+        """Clear per-session state (votes, frame buffer)."""
+        self._votes: Dict[int, Dict[str, Any]] = {}
+        self._last_frame: Optional[np.ndarray] = None
+        self._last_results: List[Dict[str, Any]] = []
+        self._last_crops: Dict[int, np.ndarray] = {}
+
+    # ─────────────────── lazy model loading ───────────────────
+    def _get_subclasses(self, parent: str) -> List[str]:
+        if parent in self._subclass_map:
+            return self._subclass_map[parent]
+
+        parent_dir = self.config.model_dir / parent
+        if parent_dir.is_dir():
+            subs = [f.stem for f in parent_dir.glob("*.pth")]
+        else:
+            pth = self.config.model_dir / f"{parent}.pth"
+            subs = [parent] if pth.exists() else []
+
+        self._subclass_map[parent] = subs
+        return subs
+
+    def _ensure_index(self, name: str, parent: Optional[str] = None) -> bool:
+        if name in self._indices:
+            return True
+
+        if parent:
+            pth = self.config.model_dir / parent / f"{name}.pth"
+        else:
+            pth = self.config.model_dir / f"{name}.pth"
+
+        if not pth.exists():
+            return False
+
+        try:
+            bank, meta = MemoryBank.load(pth)
+            idx = self._scorer.build_index(bank)
+            self._indices[name] = idx
+            raw_thr = float(meta.get("threshold", 0.50))
+            self._thresholds[name] = raw_thr * self.config.threshold_multiplier
+            print(f"[Loaded] {name}: dim={bank.shape[1]:,}  "
+                  f"thr={raw_thr:.4f} × {self.config.threshold_multiplier} "
+                  f"= {self._thresholds[name]:.4f}")
+            return True
+        except Exception as exc:
+            print(f"[Error] {name}: {exc}")
+            return False
+
+    # ─────────────────── classify one pill ───────────────────
+    def _classify_pill(
+        self,
+        feats: np.ndarray,
+        classes: List[str],
+    ) -> Tuple[str, Dict[str, float], List[str]]:
+        """
+        Score one pill's features against all compare classes.
+
+        Returns ``(status, class_scores, normal_from)``.
+        """
+        if feats is None or feats.shape[0] == 0:
+            return "NORMAL", {}, []
+
+        scores: Dict[str, float] = {}
+        normal_from: List[str] = []
+
+        for parent in classes:
+            subs = self._get_subclasses(parent)
+            if not subs:
+                if self._ensure_index(parent):
+                    subs = [parent]
+                else:
+                    continue
+
+            for sub in subs:
+                if not self._ensure_index(sub, parent):
+                    continue
+                s = self._scorer.score_pill(
+                    feats, self._indices[sub],
+                    method=self.config.score_method,
+                )
+                scores[sub] = s
+                if s <= self._thresholds[sub]:
+                    normal_from.append(sub)
+
+        status = "NORMAL" if normal_from else "ANOMALY"
+        return status, scores, normal_from
+
+    # ═════════════════════════════════════════════════════════
+    #  REALTIME  (per-frame + vote accumulation)
+    # ═════════════════════════════════════════════════════════
+    def classify_anomaly(
+        self,
+        frame: np.ndarray,
+        class_names: Optional[Sequence[str]] = None,
+    ) -> np.ndarray:
+        """
+        Process **one frame**: detect → crop → batch extract → score → vote.
+
+        Returns annotated preview image.
+        """
+        classes = list(class_names or self.config.compare_classes)
+        self._last_frame = frame.copy()
+
+        # 1. YOLO detect + crop
+        crops, infos = self._segmentor.detect_and_crop(
+            frame,
+            target_size=self.config.crop_size,
+            bg_value=self.config.bg_value,
+            pad=self.config.pad,
+        )
+
+        # 2. Batch feature extraction  ← 🔥 speed trick
+        batch_feats = self._extractor.extract_batch(crops) if crops else []
+
+        # 3. Per-pill classification
+        frame_results: List[Dict[str, Any]] = []
+        frame_crops: Dict[int, np.ndarray] = {}
+
+        for i, (crop, info) in enumerate(zip(crops, infos)):
+            tid = int(info.get("track_id", -1))
+            feats = batch_feats[i]
+
+            status, scores, normal_from = self._classify_pill(feats, classes)
+
+            frame_results.append({
+                "id": tid,
+                "bbox": info["bbox"],
+                "conf": info["conf"],
+                "status": status,
+                "class_scores": scores,
+                "normal_from": normal_from,
+            })
+
+            if tid >= 0:
+                frame_crops[tid] = crop
+
+        # 4. De-dup: keep highest conf per track_id
+        best: Dict[int, Dict] = {}
+        for r in frame_results:
+            tid = r["id"]
+            if tid < 0:
+                continue
+            if tid not in best or r["conf"] > best[tid]["conf"]:
+                best[tid] = r
+
+        # 5. Vote accumulation
+        for tid, r in best.items():
+            if tid not in self._votes:
+                self._votes[tid] = {
+                    "bbox": r["bbox"],
+                    "NORMAL": 0,
+                    "ANOMALY": 0,
+                    "best_scores": {},
+                }
+            self._votes[tid]["bbox"] = r["bbox"]
+            self._votes[tid][r["status"]] += 1
+            self._votes[tid]["best_scores"] = r.get("class_scores", {})
+
+        self._last_results = list(best.values())
+        self._last_crops = {
+            tid: frame_crops[tid]
+            for tid in best if tid in frame_crops
+        }
+
+        return draw_pill_results(self._last_frame, self._last_results)
+
+    # ═════════════════════════════════════════════════════════
+    #  SINGLE-IMAGE prediction  → JSON
+    # ═════════════════════════════════════════════════════════
+    def predict_image(
+        self,
+        image: np.ndarray,
+        class_names: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Predict anomalies in **one image** (folder-based mode).
+
+        Returns
+        -------
+        ::
+
+            {
+                "count":      int,
+                "bad_count":  int,
+                "bad_pills":  [{"bbox": [...], "score": float}, …],
+                "good_count": int,
+                "good_pills": [{"bbox": [...], "score": float}, …],
+            }
+        """
+        classes = list(class_names or self.config.compare_classes)
+
+        crops, infos = self._segmentor.detect_and_crop(
+            image,
+            target_size=self.config.crop_size,
+            bg_value=self.config.bg_value,
+            pad=self.config.pad,
+        )
+
+        batch_feats = self._extractor.extract_batch(crops) if crops else []
+
+        good_pills: List[Dict] = []
+        bad_pills: List[Dict] = []
+
+        for i, (_, info) in enumerate(zip(crops, infos)):
+            feats = batch_feats[i]
+            status, all_scores, normal_from = self._classify_pill(
+                feats, classes)
+
+            pill = {
+                "bbox": list(info["bbox"]),
+                "score": round(
+                    min(all_scores.values()) if all_scores else 0.0, 4),
+                "class_scores": {k: round(v, 4) for k, v in all_scores.items()},
+            }
+            if normal_from:
+                pill["matched_class"] = normal_from
+                good_pills.append(pill)
+            else:
+                bad_pills.append(pill)
+
+        return {
+            "count": len(crops),
+            "bad_count": len(bad_pills),
+            "bad_pills": bad_pills,
+            "good_count": len(good_pills),
+            "good_pills": good_pills,
+        }
+
+    # ═════════════════════════════════════════════════════════
+    #  SUMMARY  (majority vote across frames)
+    # ═════════════════════════════════════════════════════════
+    def summarize(self) -> Dict[str, Any]:
+        """
+        Majority-vote summary over all accumulated frames.
+
+        Returns dict with ``image``, ``count``, ``good_count / bad_count``,
+        ``good_pills / bad_pills``.
+        """
+        if self._last_frame is None:
+            return {
+                "image": None, "count": 0,
+                "good_count": 0, "bad_count": 0,
+                "good_pills": [], "bad_pills": [],
+            }
+
+        good_pills: List[Dict] = []
+        bad_pills: List[Dict] = []
+        items: List[Dict] = []
+
+        for tid in sorted(self._votes):
+            v = self._votes[tid]
+            n_ok = v.get("NORMAL", 0)
+            n_bad = v.get("ANOMALY", 0)
+            status = "NORMAL" if n_ok > n_bad else "ANOMALY"
+
+            best = v.get("best_scores", {})
+            score = round(min(best.values()) if best else 0.0, 4)
+
+            pill = {
+                "bbox": list(v["bbox"]),
+                "score": score,
+                "votes": {"NORMAL": n_ok, "ANOMALY": n_bad},
+            }
+
+            if status == "NORMAL":
+                good_pills.append(pill)
+            else:
+                bad_pills.append(pill)
+
+            items.append({
+                "id": tid,
+                "bbox": v["bbox"],
+                "status": status,
+            })
+
+        vis = draw_summary(self._last_frame, items)
+
+        return {
+            "image": vis,
+            "count": len(good_pills) + len(bad_pills),
+            "good_count": len(good_pills),
+            "bad_count": len(bad_pills),
+            "good_pills": good_pills,
+            "bad_pills": bad_pills,
+        }
+
+    # ─────────────────── reset ───────────────────
+    def reset(self) -> None:
+        """Clear votes, tracking, and frame state."""
+        self._init_state()
+        self._segmentor.reset_tracking()
+
+    # ─────────────────── properties ───────────────────
+    @property
+    def last_crops(self) -> Dict[int, np.ndarray]:
+        return dict(self._last_crops)
+
+    @property
+    def anomaly_counts(self) -> Dict[int, int]:
+        return {tid: v.get("ANOMALY", 0) for tid, v in self._votes.items()}
+
+    @property
+    def detector(self) -> YOLOSegmentor:
+        return self._segmentor
+
+```
+Core_ResnetPatchCore\pipeline\train.py
+```
+"""
+Training Pipeline
+=================
+
+Train PatchCore memory bank from **good-only** pill images.
+
+Flow
+----
+::
+
+    GOOD images
+        ↓  (pre-cropped pills — per subclass folder)
+    ResNet50 feature extraction   (batch)
+        ↓
+    accumulate patches → MemoryBank
+        ↓
+    coreset subsample  (target ≈ 15 k–20 k)
+        ↓
+    L2 normalize
+        ↓
+    calibrate threshold  (percentile 99.5 / mean+3σ / F1 sweep)
+        ↓
+    save  →  .pth  {memory_bank, threshold, meta…}
+
+No back-propagation — training completes in minutes.
+"""
+from __future__ import annotations
+
+import numpy as np
+from pathlib import Path
+from PIL import Image
+from typing import Dict, List, Optional, Set
+
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.patchcore.memory_bank import MemoryBank
+from Core_ResnetPatchCore.patchcore.scorer import PatchCoreScorer
+
+
+class TrainPipeline:
+    """
+    Train PatchCore model for one (or many) pill classes.
+
+    Parameters
+    ----------
+    extractor : ResNet50FeatureExtractor
+    coreset_ratio : float
+        Fraction of patches to keep after coreset sampling.
+    seed : int
+        Random seed for reproducibility.
+    fallback_threshold : float
+        Used when calibration data is absent.
+    k_nearest : int
+        ``k`` for kNN scoring during threshold calibration.
+    score_method : str
+        Scoring method used for threshold calibration **and** inference.
+        Must match what the inspector uses at predict time.
+        One of: ``"max"`` | ``"top1_mean"`` | ``"top5_mean"`` | ``"top10_mean"``.
+    """
+
+    IMAGE_EXTS: Set[str] = {".jpg", ".jpeg", ".png", ".bmp"}
+
+    def __init__(
+        self,
+        extractor: ResNet50FeatureExtractor,
+        coreset_ratio: float = 0.10,
+        seed: int = 42,
+        fallback_threshold: float = 0.50,
+        k_nearest: int = 3,
+        score_method: str = "max",
+    ):
+        self.extractor = extractor
+        self.coreset_ratio = coreset_ratio
+        self.seed = seed
+        self.fallback_threshold = fallback_threshold
+        self.k_nearest = k_nearest
+        self.score_method = score_method
+
+    # ─────────────────── helpers ───────────────────
+    @classmethod
+    def list_images(cls, directory: Path) -> List[Path]:
+        """List image files sorted alphabetically."""
+        if not directory.is_dir():
+            return []
+        return sorted(
+            p for p in directory.iterdir()
+            if p.is_file() and p.suffix.lower() in cls.IMAGE_EXTS
+        )
+
+    # ─────────────────── train one class ───────────────────
+    def train_class(
+        self,
+        good_dir: Path,
+        output_path: Path,
+        test_dir: Optional[Path] = None,
+        extra_meta: Optional[Dict] = None,
+    ) -> Optional[Path]:
+        """
+        Train memory bank for a single class / subclass.
+
+        Parameters
+        ----------
+        good_dir : Path
+            Folder of good pill crops (``train/good``).
+        output_path : Path
+            Where to save the ``.pth`` model file.
+        test_dir : Path, optional
+            ``test/`` folder with ``good/`` and optionally ``bad/`` sub-dirs.
+        extra_meta : dict, optional
+            Extra metadata to persist (overrides defaults).
+
+        Returns
+        -------
+        Path to saved ``.pth``, or ``None`` on failure.
+        """
+        images = self.list_images(good_dir)
+        if not images:
+            print(f"    [Skip] No images in {good_dir}")
+            return None
+
+        print(f"    Extracting features from {len(images)} images …")
+
+        # ── build memory bank ──
+        bank = MemoryBank()
+        for img_path in images:
+            try:
+                pil = Image.open(img_path).convert("RGB")
+                patches = self.extractor.extract(pil)
+                bank.add(patches)
+            except Exception as exc:
+                print(f"    Skip {img_path.name}: {exc}")
+
+        if bank.total_patches == 0:
+            print("    [Skip] No patches extracted")
+            return None
+
+        memory = bank.build(
+            coreset_ratio=self.coreset_ratio,
+            seed=self.seed,
+        )
+
+        # ── threshold ──
+        threshold = self._calibrate(memory, test_dir)
+        print(f"    Threshold: {threshold:.4f}")
+
+        # ── metadata ──
+        meta: Dict = {
+            "threshold": threshold,
+            "backbone": getattr(self.extractor, "backbone_path", None) or "resnet50",
+            "img_size": self.extractor.img_size,
+            "grid_size": self.extractor.grid_size,
+            "feature_dim": self.extractor.feature_dim,
+            "k_nearest": self.k_nearest,
+            "score_method": self.score_method,   # ← saved so inference can match exactly
+            "use_color_features": self.extractor.use_color_features,
+            "use_hsv": self.extractor.use_hsv,
+            "color_weight": self.extractor.color_weight,
+        }
+        if extra_meta:
+            meta.update(extra_meta)
+
+        bank.save(output_path, meta)
+        return output_path
+
+    # ─────────────────── threshold calibration ───────────────────
+    def _calibrate(
+        self,
+        memory_bank: np.ndarray,
+        test_dir: Optional[Path] = None,   # ← ไม่ใช้แล้ว
+    ) -> float:
+        """
+        Calibrate using BAD_DIR only (no good images).
+        """
+
+        from config.base import BAD_DIR
+
+        bad_dir = Path(BAD_DIR)
+        bad_paths = self.list_images(bad_dir)
+
+        if not bad_paths:
+            print("    [Calibrate] No BAD images → fallback")
+            return self.fallback_threshold
+
+        scorer = PatchCoreScorer(k_nearest=self.k_nearest)
+        index = scorer.build_index(memory_bank)
+
+        bad_scores = self._score_paths(bad_paths, scorer, index)
+
+        if not bad_scores:
+            print("    [Calibrate] No bad scores → fallback")
+            return self.fallback_threshold
+
+        arr = np.array(bad_scores, dtype=np.float32)
+
+        # ใช้ percentile ต่ำ ๆ ของ bad เป็น threshold
+        threshold = float(np.percentile(arr, 5.0))
+
+        print(f"    [Calibrate] BAD-only threshold (p5): {threshold:.4f}")
+        return threshold
+
+    def _score_paths(
+        self,
+        paths: List[Path],
+        scorer: PatchCoreScorer,
+        index,
+    ) -> List[float]:
+        scores: list = []
+        for p in paths:
+            try:
+                pil = Image.open(p).convert("RGB")
+                patches = self.extractor.extract(pil)
+                # use the SAME score_method that will be used at inference
+                scores.append(scorer.score_pill(patches, index,
+                                                method=self.score_method))
+            except Exception:
+                pass
+        return scores
+
+    @staticmethod
+    def _f1_sweep(
+        good: np.ndarray,
+        bad: np.ndarray,
+        n_steps: int = 351,
+    ) -> float:
+        """Find threshold that maximises F1."""
+        all_s = np.concatenate([good, bad])
+        thrs = np.unique(np.quantile(all_s, np.linspace(0, 1, n_steps)))
+
+        best_thr = float(thrs[0])
+        best_f1 = -1.0
+
+        for thr in thrs:
+            tp = int((bad > thr).sum())
+            fp = int((good > thr).sum())
+            fn = int(bad.size) - tp
+            prec = tp / (tp + fp) if (tp + fp) else 0.0
+            rec = tp / (tp + fn) if (tp + fn) else 0.0
+            f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thr = float(thr)
+
+        return best_thr
+
+```
+Core_ResnetPatchCore\pipeline\visualizer.py
+```
+"""
+Visualization Utilities
+=======================
+
+Draw bboxes, labels, overlays for pill inspection.
+No business logic — pure drawing.
+"""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+from typing import Any, Dict, List, Tuple
+
+
+# ── colours (BGR) ──
+COLOR_NORMAL  = (0, 255, 100)   # green
+COLOR_ANOMALY = (0, 0, 255)     # red
+COLOR_WHITE   = (255, 255, 255)
+COLOR_BLACK   = (0, 0, 0)
+
+
+# ─────────────────────────────────────────────────────────
+#  Text helpers
+# ─────────────────────────────────────────────────────────
+def put_text_with_bg(
+    img: np.ndarray,
+    text: str,
+    position: Tuple[int, int],
+    font_scale: float = 0.7,
+    color: Tuple[int, int, int] = COLOR_WHITE,
+    bg_color: Tuple[int, int, int] = COLOR_BLACK,
+    thickness: int = 2,
+) -> None:
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+    x, y = position
+    cv2.rectangle(img, (x - 5, y - th - 5), (x + tw + 5, y + 5), bg_color, -1)
+    cv2.putText(img, text, (x, y), font, font_scale, color, thickness)
+
+
+def put_text_top_left(
+    img: np.ndarray,
+    text: str,
+    margin: int = 15,
+    font_scale: float = 0.8,
+    color: Tuple[int, int, int] = COLOR_WHITE,
+    bg_color: Tuple[int, int, int] = COLOR_BLACK,
+    thickness: int = 2,
+) -> None:
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+    x, y = margin, th + margin
+    cv2.rectangle(img, (x - 8, y - th - 8), (x + tw + 8, y + 8), bg_color, -1)
+    cv2.putText(img, text, (x, y), font, font_scale, color, thickness)
+
+
+def put_text_top_right(
+    img: np.ndarray,
+    text: str,
+    margin: int = 15,
+    font_scale: float = 0.8,
+    color: Tuple[int, int, int] = COLOR_WHITE,
+    bg_color: Tuple[int, int, int] = COLOR_ANOMALY,
+    thickness: int = 2,
+) -> None:
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+    h, w = img.shape[:2]
+    x = w - tw - margin
+    y = th + margin
+    cv2.rectangle(img, (x - 8, y - th - 8), (x + tw + 8, y + 8), bg_color, -1)
+    cv2.putText(img, text, (x, y), font, font_scale, color, thickness)
+
+
+# ─────────────────────────────────────────────────────────
+#  Drawing functions
+# ─────────────────────────────────────────────────────────
+def draw_pill_results(
+    frame: np.ndarray,
+    results: List[Dict[str, Any]],
+) -> np.ndarray:
+    """
+    Draw per-frame detection results: coloured bboxes + labels.
+    """
+    vis = frame.copy()
+    for r in results:
+        bbox = r.get("bbox", r.get("padded_region", (0, 0, 0, 0)))
+        x1, y1, x2, y2 = map(int, bbox)
+        status = r.get("status", "UNKNOWN")
+        tid = r.get("id", r.get("track_id", -1))
+        normal_from = r.get("normal_from", [])
+
+        color = COLOR_NORMAL if status == "NORMAL" else COLOR_ANOMALY
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 3)
+
+        label = f"ID:{tid} | {status}"
+        if normal_from:
+            label += f" ({','.join(normal_from)})"
+        cv2.putText(vis, label, (x1, max(20, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    return vis
+
+
+def draw_summary(
+    frame: np.ndarray,
+    items: List[Dict[str, Any]],
+    show_overlay: bool = True,
+) -> np.ndarray:
+    """
+    Draw summary results with anomaly-count overlay.
+    """
+    vis = frame.copy()
+    anomaly_count = 0
+
+    for it in items:
+        bbox = it.get("bbox", (0, 0, 0, 0))
+        x1, y1, x2, y2 = map(int, bbox)
+        status = it.get("status", "UNKNOWN")
+        tid = it.get("id", -1)
+
+        color = COLOR_NORMAL if status == "NORMAL" else COLOR_ANOMALY
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 3)
+
+        if status == "ANOMALY":
+            anomaly_count += 1
+
+        label = f"ID:{tid} {status}"
+        cv2.putText(vis, label, (x1, max(20, y1 - 10)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+    if show_overlay:
+        bg = COLOR_ANOMALY if anomaly_count > 0 else COLOR_BLACK
+        put_text_top_right(vis, f"Anomaly: {anomaly_count}", bg_color=bg)
+
+    return vis
+```
+Core_ResnetPatchCore\predict_camera.py
+```
+#!/usr/bin/env python3
+# ResnetPatchCore/predict_camera.py
+"""
+Realtime Pill Inspection — ResNet50 PatchCore
+=============================================
+
+Flow (per frame)
+----------------
+::
+
+    camera frame
+        ↓
+    YOLOv12-seg  → instance masks + bboxes
+        ↓
+    per-pill crop (mask × frame, pad to 256×256)
+        ↓
+    batch ResNet50 feature extraction  (layer2+layer3)
+        ↓
+    PatchCore kNN scoring  (compare against COMPARE_CLASSES)
+        ↓
+    vote accumulation → majority vote → summary
+        ↓
+    output JSON:
+        { count, bad_count, bad_pills, good_count, good_pills }
+
+Console output per pill
+-----------------------
+::
+
+    [ID:1] ✗ ANOMALY
+        vitaminc_front: 0.3841 > 0.3628 → ANOMALY
+        vitaminc_back:  0.3781 > 0.3278 → ANOMALY
+        paracap:        0.6313 > 0.3663 → ANOMALY
+    [ID:2] ✓ NORMAL
+        paracap: 0.3159 ≤ 0.3663 → NORMAL
+        Normal from: paracap
+
+Hotkeys
+-------
+    s      Save current crops
+    r      Reset votes and tracking
+    Enter  Force summarize
+    ESC/q  Quit
+
+Usage
+-----
+::
+
+    python run_realtime.py --model=resnet
+    python ResnetPatchCore/predict_camera.py
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import cv2
+import json
+import numpy as np
+from datetime import datetime
+
+from Core_ResnetPatchCore.pipeline.infer import PillInspector, InspectorConfig
+from Core_ResnetPatchCore.pipeline.visualizer import (
+    draw_summary, put_text_top_left, put_text_top_right,
+    COLOR_ANOMALY, COLOR_BLACK,
+)
+
+from config.base import (
+    SEGMENTATION_MODEL_PATH,
+    DETECTION_MODEL_PATH,
+    SAVE_DIR,
+    COMPARE_CLASSES,
+    CAMERA_INDEX,
+    FRAMES_BEFORE_SUMMARY,
+    WINDOW_NAME,
+)
+from config.resnet import (
+    BACKBONE,
+    MODEL_OUTPUT_DIR,
+    IMG_SIZE,
+    GRID_SIZE,
+    K_NEAREST,
+    USE_COLOR_FEATURES,
+    USE_HSV,
+    COLOR_WEIGHT,
+)
+
+
+# ─────────────────── helpers ───────────────────
+def save_crops(crops: dict, out_dir: Path) -> int:
+    if not crops:
+        return 0
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    for tid, crop in crops.items():
+        cv2.imwrite(str(out_dir / f"crop_{ts}_id{tid}.jpg"), crop)
+    return len(crops)
+
+
+def build_crop_grid(crops: dict, cell_size: int = 128, max_cols: int = 5) -> "np.ndarray | None":
+    """Build a visual grid of crop images (what enters PatchCore) for preview."""
+    if not crops:
+        return None
+    items = list(crops.items())
+    n = len(items)
+    cols = min(n, max_cols)
+    rows = (n + cols - 1) // cols
+    label_h = 20
+    grid = np.zeros((rows * (cell_size + label_h), cols * cell_size, 3), dtype=np.uint8)
+    for idx, (tid, img) in enumerate(items):
+        row = idx // cols
+        col = idx % cols
+        y = row * (cell_size + label_h)
+        x = col * cell_size
+        cell = img[:, :, :3] if img.ndim == 3 and img.shape[2] == 4 else img
+        cell = cv2.resize(cell, (cell_size, cell_size), interpolation=cv2.INTER_LANCZOS4)
+        grid[y + label_h:y + label_h + cell_size, x:x + cell_size] = cell
+        cv2.putText(grid, f"ID:{tid}", (x + 4, y + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    return grid
+
+
+def print_frame_scores(results: list, thresholds: dict) -> None:
+    """Print per-pill console output matching the spec."""
+    if not results:
+        return
+    print("-" * 60)
+    for r in results:
+        tid = r.get("id", -1)
+        status = r.get("status", "UNKNOWN")
+        scores = r.get("class_scores", {})
+        normal_from = r.get("normal_from", [])
+
+        mark = "✓" if status == "NORMAL" else "✗"
+        print(f"[ID:{tid}] {mark} {status}")
+
+        for cls, score in scores.items():
+            thr = thresholds.get(cls, 0.50)
+            if score <= thr:
+                print(f"    {cls}: {score:.4f} ≤ {thr:.4f} → NORMAL")
+            else:
+                print(f"    {cls}: {score:.4f} > {thr:.4f} → ANOMALY")
+
+        if normal_from:
+            print(f"    Normal from: {', '.join(normal_from)}")
+    print("-" * 60)
+
+
+def draw_overlay(
+    frame: np.ndarray,
+    frame_count: int,
+    total_frames: int,
+    anomaly_count: int,
+) -> np.ndarray:
+    vis = frame.copy()
+    put_text_top_left(vis, f"Frame: {frame_count}/{total_frames}")
+    if anomaly_count > 0:
+        put_text_top_right(vis, f"Anomaly frames: {anomaly_count}",
+                           bg_color=COLOR_ANOMALY)
+    return vis
+
+
+def digital_zoom(frame, zoom=1.5):
+    if zoom <= 1:
+        return frame
+
+    h, w = frame.shape[:2]
+
+    new_w = int(w / zoom)
+    new_h = int(h / zoom)
+
+    x1 = (w - new_w) // 2
+    y1 = (h - new_h) // 2
+
+    cropped = frame[y1:y1+new_h, x1:x1+new_w]
+    return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+# ─────────────────── camera loop ───────────────────
+def run_camera(inspector: PillInspector) -> None:
+    cap = cv2.VideoCapture(CAMERA_INDEX)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+    if not cap.isOpened():
+        print(f"Cannot open camera {CAMERA_INDEX}")
+        return
+
+    print(f"\n{'=' * 50}")
+    print("  ResNet50 PatchCore — Realtime Camera Inspection")
+    print(f"{'=' * 50}")
+    print(f"  Backbone       : resnet50 (layer2+layer3)")
+    print(f"  Color features : {USE_COLOR_FEATURES}  HSV: {USE_HSV}")
+    print(f"  Grid size      : {GRID_SIZE}×{GRID_SIZE}")
+    print(f"  Compare classes: {list(COMPARE_CLASSES)}")
+    print(f"{'=' * 50}")
+    print("  Hotkeys:  s=save  r=reset  Enter=summarize  ESC/q=quit")
+    print(f"{'=' * 50}\n")
+
+    frame_count = 0
+
+    while True:
+        ret, frame = cap.read()
+        frame = digital_zoom(frame, zoom=1.5)
+        if not ret:
+            print("Failed to read frame")
+            break
+
+        # classify
+        preview = inspector.classify_anomaly(frame)
+        frame_count += 1
+
+        # overlay
+        total_anomaly = sum(inspector.anomaly_counts.values())
+        vis = draw_overlay(preview, frame_count,
+                           FRAMES_BEFORE_SUMMARY, total_anomaly)
+
+        # console output
+        if inspector._last_results:
+            print_frame_scores(inspector._last_results,
+                               inspector._thresholds)
+
+        # auto-summarize after N frames
+        if frame_count >= FRAMES_BEFORE_SUMMARY:
+            result = inspector.summarize()
+            if result["image"] is not None:
+                cv2.imshow(WINDOW_NAME, result["image"])
+
+                # JSON output
+                out = {
+                    "count": result["count"],
+                    "good_count": result["good_count"],
+                    "bad_count": result["bad_count"],
+                    "good_pills": result["good_pills"],
+                    "bad_pills": result["bad_pills"],
+                }
+                print(f"\n{'=' * 50}")
+                # print("SUMMARY:")
+                # print(json.dumps(out, indent=2, ensure_ascii=False))
+                print(f"{'=' * 50}\n")
+
+                cv2.waitKey(2000)
+
+            inspector.reset()
+            frame_count = 0
+
+        cv2.imshow(WINDOW_NAME, vis)
+
+        # Show crop preview (pills before PatchCore)
+        crop_grid = build_crop_grid(inspector.last_crops)
+        if crop_grid is not None:
+            cv2.imshow("Crop Preview", crop_grid)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key in (ord('q'), 27):
+            break
+        elif key == ord('s'):
+            n = save_crops(inspector.last_crops, SAVE_DIR)
+            print(f"Saved {n} crops → {SAVE_DIR}")
+        elif key == ord('r'):
+            inspector.reset()
+            frame_count = 0
+            print("Reset!")
+        elif key == 13:  # Enter
+            result = inspector.summarize()
+            if result["image"] is not None:
+                cv2.imshow(WINDOW_NAME, result["image"])
+                print(json.dumps({
+                    "count": result["count"],
+                    "good_count": result["good_count"],
+                    "bad_count": result["bad_count"],
+                }, indent=2))
+                cv2.waitKey(2000)
+            inspector.reset()
+            frame_count = 0
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+
+# ─────────────────── main ───────────────────
+def main():
+    print("Initializing ResNet50 PatchCore Inspector ...")
+
+    # Resolve backbone path from config
+    backbone_path = BACKBONE if BACKBONE and BACKBONE.endswith(".pth") else None
+
+    config = InspectorConfig(
+        compare_classes=list(COMPARE_CLASSES),
+        model_dir=MODEL_OUTPUT_DIR,
+        yolo_model_path=str(SEGMENTATION_MODEL_PATH),
+        model_size=IMG_SIZE,
+        grid_size=GRID_SIZE,
+        k_nearest=K_NEAREST,
+        use_color_features=USE_COLOR_FEATURES,
+        use_hsv=USE_HSV,
+        color_weight=COLOR_WEIGHT,
+        backbone_path=backbone_path,
+    )
+
+    inspector = PillInspector(config)
+
+    print("Starting camera ...")
+    run_camera(inspector)
+
+
+if __name__ == "__main__":
+    main()
+
+```
+Core_ResnetPatchCore\train_patchcore.py
+```
+#!/usr/bin/env python3
+# ResnetPatchCore/train_patchcore.py
+"""
+ResNet50 PatchCore Training
+===========================
+
+Flow
+----
+::
+
+    data/{class}/{sub}/train/good/  (pre-cropped pills)
+        ↓
+    ResNet50 feature extraction  (layer2 + layer3 → 1536-dim)
+        ↓
+    memory bank  →  coreset subsample  →  L2 normalize
+        ↓
+    threshold calibration  (F1 sweep / percentile 99.5 / mean+3σ)
+        ↓
+    save  →  model/patchcore_resnet/{class}/{sub}.pth
+
+No backprop — completes in minutes.
+
+Usage
+-----
+::
+
+    python run_train.py --model=resnet
+    python ResnetPatchCore/train_patchcore.py
+"""
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import torch
+from datetime import datetime
+
+from Core_ResnetPatchCore.patchcore.feature_extractor import ResNet50FeatureExtractor
+from Core_ResnetPatchCore.pipeline.train import TrainPipeline
+
+from config.base import DATA_ROOT, SELECTED_CLASSES, SEED, IMAGE_EXTS
+from config.resnet import (
+    BACKBONE,
+    IMG_SIZE,
+    GRID_SIZE,
+    CORESET_RATIO,
+    K_NEAREST,
+    FALLBACK_THRESHOLD,
+    MODEL_OUTPUT_DIR,
+    USE_COLOR_FEATURES,
+    USE_HSV,
+    COLOR_WEIGHT,
+    SCORE_METHOD,
+)
+
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+# ─────────────────── directory helpers ───────────────────
+def _find_subclass_dirs(parent_dir: Path) -> list[Path]:
+    """Return subclass dirs that contain train/good/ with images."""
+    subs = []
+    for d in sorted(parent_dir.iterdir()):
+        if d.is_dir():
+            good = d / "train" / "good"
+            if good.is_dir() and TrainPipeline.list_images(good):
+                subs.append(d)
+    return subs
+
+
+def _resolve_parents(data_root: Path) -> list[Path]:
+    """Return parent class dirs that have valid subclass dirs."""
+    if SELECTED_CLASSES:
+        candidates = [data_root / c for c in SELECTED_CLASSES
+                       if (data_root / c).is_dir()]
+    else:
+        candidates = [d for d in data_root.iterdir() if d.is_dir()]
+
+    resolved = []
+    for d in sorted(candidates, key=lambda p: p.name):
+        if _find_subclass_dirs(d):
+            resolved.append(d)
+        else:
+            print(f"[Skip] {d.name}: no valid subclass folders")
+    return resolved
+
+
+# ─────────────────── main ───────────────────
+def main():
+    parser = argparse.ArgumentParser(description="ResNet50 PatchCore Training")
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to a custom backbone .pth file. "
+             "Defaults to BACKBONE in config/resnet.py.",
+    )
+    args, _ = parser.parse_known_args()
+
+    # CLI --backbone overrides config; config overrides ImageNet default
+    backbone_path = args.backbone or BACKBONE
+    # If config says 'resnet50' (no file), treat as None → ImageNet pretrained
+    if backbone_path and not Path(backbone_path).suffix == ".pth":
+        backbone_path = None
+    backbone_label = backbone_path if backbone_path else "resnet50 (ImageNet pretrained)"
+
+    print("=" * 70)
+    print("      ResNet50 PatchCore Training")
+    print("=" * 70)
+    print(f"  Device        : {DEVICE}")
+    print(f"  Backbone      : {backbone_label}")
+    print(f"  Image size    : {IMG_SIZE} × {IMG_SIZE}")
+    print(f"  Grid size     : {GRID_SIZE} × {GRID_SIZE}")
+    print(f"  Color features: {USE_COLOR_FEATURES}  HSV: {USE_HSV}  weight: {COLOR_WEIGHT}")
+    print(f"  Score method  : {SCORE_METHOD}")
+    print(f"  Coreset ratio : {CORESET_RATIO}")
+    print(f"  k-nearest     : {K_NEAREST}")
+    print(f"  Fallback thr  : {FALLBACK_THRESHOLD}")
+    print(f"  Data root     : {DATA_ROOT}")
+    print(f"  Model output  : {MODEL_OUTPUT_DIR}")
+    print("=" * 70)
+
+    # ── init ──
+    extractor = ResNet50FeatureExtractor(
+        img_size=IMG_SIZE,
+        grid_size=GRID_SIZE,
+        device=DEVICE,
+        use_color_features=USE_COLOR_FEATURES,
+        use_hsv=USE_HSV,
+        color_weight=COLOR_WEIGHT,
+        backbone_path=backbone_path,
+    )
+
+    pipeline = TrainPipeline(
+        extractor=extractor,
+        coreset_ratio=CORESET_RATIO,
+        seed=SEED,
+        fallback_threshold=FALLBACK_THRESHOLD,
+        k_nearest=K_NEAREST,
+        score_method=SCORE_METHOD,    # threshold calibrated with the same method as inference
+    )
+
+    MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── resolve classes ──
+    parents = _resolve_parents(Path(DATA_ROOT))
+    if not parents:
+        print("No valid parent class folders found.")
+        return
+
+    print(f"\nFound {len(parents)} parent classes:")
+    for p in parents:
+        subs = _find_subclass_dirs(p)
+        print(f"  • {p.name}: {len(subs)} subclasses")
+    print()
+
+    # ── train ──
+    total = 0
+    t0 = datetime.now()
+
+    for parent_dir in parents:
+        parent_name = parent_dir.name
+        print(f"\n{'=' * 60}")
+        print(f"Parent Class: {parent_name}")
+        print(f"{'=' * 60}")
+
+        for sub_dir in _find_subclass_dirs(parent_dir):
+            sub_name = sub_dir.name
+            print(f"\n  Subclass: {sub_name}")
+            print(f"  {'-' * 50}")
+
+            good_dir = sub_dir / "train" / "good"
+            test_dir = sub_dir / "test" if (sub_dir / "test").is_dir() else None
+            out_path = MODEL_OUTPUT_DIR / parent_name / f"{sub_name}.pth"
+
+            result = pipeline.train_class(
+                good_dir=good_dir,
+                output_path=out_path,
+                test_dir=test_dir,
+            )
+            if result:
+                total += 1
+
+    elapsed = datetime.now() - t0
+    print(f"\n{'=' * 70}")
+    print(f"  Training Complete!")
+    print(f"  Subclasses trained : {total}")
+    print(f"  Time               : {elapsed}")
+    print(f"  Models saved to    : {MODEL_OUTPUT_DIR}")
+    print(f"{'=' * 70}")
+
+
+if __name__ == "__main__":
+    main()
+
+```
+run_realtime.py
+```
+#!/usr/bin/env python3
+"""
+Unified Realtime Camera Prediction
+===================================
+Run camera-based pill inspection with any PatchCore model.
+
+Usage:
+    python run_realtime.py --model=mobile_sife_cuda
+    python run_realtime.py --model=resnet
+    python run_realtime.py --list
+
+Note: FCDD ไม่รองรับ realtime camera — ใช้ run_predict.py แทน
+
+Available models:
+    mobile_sife_cuda  - MobileNet + SIFE PatchCore (CUDA Optimized)
+    mobilenet_sife    - MobileNet + SIFE PatchCorea
+    mobilenet         - MobileNet PatchCore
+    resnet            - ResNet18 PatchCore (Color-Aware)
+    dinov2            - DINOv2 PatchCore
+    cnn_multiscale    - CNN Multi-Scale PatchCore (Tiny Defect)
+    wideresnet        - WideResNet50 PatchCore
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent
+
+MODEL_REGISTRY = {
+    "mobile_sife_cuda": {
+        "script": "Core_mobile_sife_cuda/predict_camera.py",
+        "desc": "MobileNet + SIFE PatchCore (CUDA Optimized)",
+    },
+    "mobilenet_sife": {
+        "script": "Core_mobilenet_sife/predict_camera.py",
+        "desc": "MobileNet + SIFE PatchCore",
+    },
+    "mobilenet": {
+        "script": "Core_mobilenet/predict_camera.py",
+        "desc": "MobileNet PatchCore",
+    },
+    "resnet": {
+        "script": "Core_ResnetPatchCore/predict_camera.py",
+        "desc": "ResNet50 PatchCore (Color-Aware)",
+    },
+    "dinov2": {
+        "script": "Core_DINOv2PatchCore/predict_camera_dinov2.py",
+        "desc": "DINOv2 PatchCore",
+    },
+    "cnn_multiscale": {
+        "script": "Core_CNNMultiScale/predict_camera.py",
+        "desc": "CNN Multi-Scale PatchCore (Tiny Defect)",
+    },
+    "wideresnet": {
+        "script": "Core_WideResnetAnomalyCore/predict_camera.py",
+        "desc": "WideResNet50 PatchCore",
+    },
+}
+
+
+def list_models():
+    print("Available models (realtime camera):")
+    print("-" * 50)
+    for name, info in MODEL_REGISTRY.items():
+        print(f"  {name:<20s}  {info['desc']}")
+    print("-" * 50)
+    print("\nNote: FCDD ใช้ run_predict.py (folder-based)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Unified Realtime Camera Prediction for MediScan-AI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--model", "-m",
+        type=str,
+        choices=list(MODEL_REGISTRY.keys()),
+        help="Model to use for prediction",
+    )
+    parser.add_argument(
+        "--list", "-l",
+        action="store_true",
+        help="List available models",
+    )
+
+    args = parser.parse_args()
+
+    if args.list or args.model is None:
+        list_models()
+        if args.model is None:
+            print("\nUsage: python run_realtime.py --model=<model_name>")
+        return
+
+    info = MODEL_REGISTRY[args.model]
+    script = ROOT / info["script"]
+
+    if not script.exists():
+        print(f"Error: Script not found: {script}")
+        sys.exit(1)
+
+    print(f"Realtime: {info['desc']}")
+    print(f"Script  : {script}")
+    print("=" * 50)
+    subprocess.run([sys.executable, str(script)])
+
+
+if __name__ == "__main__":
+    main()
+
+```
+run_train.py
+```
+#!/usr/bin/env python3
+"""
+Unified Training Runner
+=======================
+Train any model with a single command.
+
+Usage:
+    python run_train.py --model=mobile_sife_cuda
+    python run_train.py --model=fcdd
+    python run_train.py --list
+
+Available models:
+    mobile_sife_cuda  - MobileNet + SIFE PatchCore (CUDA Optimized)
+    mobilenet_sife    - MobileNet + SIFE PatchCore
+    mobilenet         - MobileNet PatchCore
+    resnet            - ResNet18 PatchCore (Color-Aware)
+    dinov2            - DINOv2 PatchCore
+    cnn_multiscale    - CNN Multi-Scale PatchCore (Tiny Defect)
+    wideresnet        - WideResNet50 PatchCore
+    fcdd              - FCDD Anomaly Detection
+"""
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).parent
+
+MODEL_REGISTRY = {
+    "mobile_sife_cuda": {
+        "script": "Core_mobile_sife_cuda/train_patchcore.py",
+        "desc": "MobileNet + SIFE PatchCore (CUDA Optimized)",
+    },
+    "mobilenet_sife": {
+        "script": "Core_MobilenetSIFE/train_patchcore.py",
+        "desc": "MobileNet + SIFE PatchCore",
+    },
+    "mobilenet": {
+        "script": "Core_MobilenetPatchCore/train_patchcore.py",
+        "desc": "MobileNet PatchCore",
+    },
+    "resnet": {
+        "script": "Core_ResnetPatchCore/train_patchcore.py",
+        "desc": "ResNet50 PatchCore (Color-Aware)",
+    },
+    "dinov2": {
+        "script": "Core_DINOv2PatchCore/train_patchcore_dinov2.py",
+        "desc": "DINOv2 PatchCore",
+    },
+    "cnn_multiscale": {
+        "script": "Core_CNNMultiScale/train_patchcore.py",
+        "desc": "CNN Multi-Scale PatchCore (Tiny Defect)",
+    },
+    "wideresnet": {
+        "script": "Core_WideResnetAnomaly/train_patchcore.py",
+        "desc": "WideResNet50 PatchCore",
+    },
+    "fcdd": {
+        "script": "Core_FCDD/fcdd_train.py",
+        "desc": "FCDD Anomaly Detection",
+    },
+}
+
+
+def list_models():
+    print("Available models:")
+    print("-" * 50)
+    for name, info in MODEL_REGISTRY.items():
+        print(f"  {name:<20s}  {info['desc']}")
+    print("-" * 50)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Unified Training Runner for MediScan-AI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--model", "-m",
+        type=str,
+        choices=list(MODEL_REGISTRY.keys()),
+        help="Model to train",
+    )
+    parser.add_argument(
+        "--list", "-l",
+        action="store_true",
+        help="List available models",
+    )
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to a custom backbone .pth file forwarded to the model script "
+             "(e.g. --backbone=resnet_backbone.pth). Currently supported by: resnet.",
+    )
+
+    args = parser.parse_args()
+
+    if args.list or args.model is None:
+        list_models()
+        if args.model is None:
+            print("\nUsage: python run_train.py --model=<model_name>")
+        return
+
+    info = MODEL_REGISTRY[args.model]
+    script = ROOT / info["script"]
+
+    if not script.exists():
+        print(f"Error: Script not found: {script}")
+        sys.exit(1)
+
+    print(f"Training: {info['desc']}")
+    print(f"Script  : {script}")
+    if args.backbone:
+        print(f"Backbone: {args.backbone}")
+    print("=" * 50)
+
+    cmd = [sys.executable, str(script)]
+    if args.backbone:
+        cmd += ["--backbone", args.backbone]
+    subprocess.run(cmd)
+
+
+if __name__ == "__main__":
+    main()
+
+
+```
