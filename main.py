@@ -7,9 +7,10 @@ Dispatch to training, prediction, or the desktop app.
 Usage::
 
     python main.py train
-    python main.py predict
+    python main.py predict --classes=Androxsil --show-morph-stage / --no-show-morph-stage
     python main.py infer --image test.jpg --classes Androxsil
     python main.py app
+    
 """
 from __future__ import annotations
 
