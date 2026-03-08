@@ -234,6 +234,32 @@ class _ScoringWorker:
                 for t in stale:
                     del self._ema_state[t]
 
+                # ── Log per-ID scores (sorted by ID) ──
+                if new_status:
+                    sorted_tids = sorted(new_status.keys())
+                    lines = []
+                    for tid in sorted_tids:
+                        info = new_status[tid]
+                        st = info["status"]
+                        scores_str = "  ".join(
+                            f"{k}={v:.4f}" for k, v in info["class_scores"].items()
+                        )
+                        thr_str = "  ".join(
+                            f"thr({k})={thresholds.get(k, 0.5):.4f}"
+                            for k in info["class_scores"]
+                        )
+                        nf = ",".join(info["normal_from"]) if info["normal_from"] else "-"
+                        lines.append(
+                            f"  ID:{tid:>3d} | {st:<7s} | {scores_str} | {thr_str} | match={nf}"
+                        )
+                    crop_sizes = ", ".join(
+                        f"ID:{tid}={new_crops[tid].shape[1]}x{new_crops[tid].shape[0]}"
+                        for tid in sorted_tids if tid in new_crops
+                    )
+                    print(f"[Score] {len(sorted_tids)} pills | crops: [{crop_sizes}]")
+                    for line in lines:
+                        print(line)
+
                 with self._result_lock:
                     self._status_map = new_status
                     self._crops_map = new_crops
