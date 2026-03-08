@@ -68,10 +68,10 @@ def draw_pill_results(
         label = f"ID:{tid} | {status}"
         if normal_from:
             label += f" ({','.join(normal_from)})"
-        _draw_label(vis, label, x1, max(20, y1 - 8), color, show_label=show_label)
+    #     _draw_label(vis, label, x1, max(20, y1 - 8), color, show_label=show_label)
 
-    if fps is not None:
-        _draw_label(vis, f"FPS: {fps:.1f}", 15, 30, COLOR_WHITE, show_label=show_label)
+    # if fps is not None:
+    #     _draw_label(vis, f"FPS: {fps:.1f}", 15, 30, COLOR_WHITE, show_label=show_label)
 
     return vis
 
@@ -99,7 +99,7 @@ def draw_summary(
             anomaly_count += 1
 
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
-        _draw_label(vis, f"ID:{tid} {status}", x1, max(20, y1 - 8), color, show_label=show_label)
+        # _draw_label(vis, f"ID:{tid} {status}", x1, max(20, y1 - 8), color, show_label=show_label)
 
     if show_overlay:
         text = f"Anomaly: {anomaly_count}"

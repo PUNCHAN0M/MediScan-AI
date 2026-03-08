@@ -55,19 +55,31 @@ def _enum_cameras(max_test: int = 5) -> list[int]:
     return available or [0]
 
 
+def _digital_zoom(frame: np.ndarray, zoom: float = 1.2) -> np.ndarray:
+    if zoom <= 1.0:
+        return frame
+    h, w = frame.shape[:2]
+    new_w, new_h = int(w / zoom), int(h / zoom)
+    x1, y1 = (w - new_w) // 2, (h - new_h) // 2
+    cropped = frame[y1:y1 + new_h, x1:x1 + new_w]
+    return cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
 # ─────────────────────────────────────────────
 #  Async Scoring Worker
 # ─────────────────────────────────────────────
 class _ScoringWorker:
     """Background thread: feature extraction + anomaly scoring."""
 
-    def __init__(self, inspector: Any):
+    def __init__(self, inspector: Any, ema_alpha: float = 0.3):
         self._inspector = inspector
+        self._ema_alpha = ema_alpha
         self._input_lock = threading.Lock()
         self._input_slot: Optional[tuple] = None
         self._result_lock = threading.Lock()
         self._status_map: Dict[int, Dict[str, Any]] = {}
         self._crops_map: Dict[int, np.ndarray] = {}
+        self._ema_state: Dict[int, Dict[str, float]] = {}
         self._new_input = threading.Event()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -93,6 +105,27 @@ class _ScoringWorker:
         self._new_input.set()
         self._thread.join(timeout=3.0)
 
+    def _update_ema(self, tid: int, raw_scores: Dict[str, float]) -> Dict[str, float]:
+        alpha = self._ema_alpha
+        prev = self._ema_state.get(tid, {})
+        smoothed: Dict[str, float] = {}
+        for key, score in raw_scores.items():
+            if key in prev:
+                smoothed[key] = alpha * score + (1.0 - alpha) * prev[key]
+            else:
+                smoothed[key] = score
+        self._ema_state[tid] = smoothed
+        return smoothed
+
+    @staticmethod
+    def _decide_status(smoothed_scores: Dict[str, float], thresholds: Dict[str, float]) -> tuple[str, List[str]]:
+        normal_from: List[str] = []
+        for key, score in smoothed_scores.items():
+            if score <= thresholds.get(key, 0.5):
+                normal_from.append(key)
+        status = "NORMAL" if normal_from else "ANOMALY"
+        return status, normal_from
+
     def _loop(self) -> None:
         while not self._stop_event.is_set():
             self._new_input.wait()
@@ -107,17 +140,32 @@ class _ScoringWorker:
             try:
                 crops, infos = data
                 results = self._inspector.score_pills(crops, infos)
+
+                thresholds: Dict[str, float] = {}
+                for cls_name, sub_thr in self._inspector._sub_thresholds.items():
+                    for sub_name, thr in sub_thr.items():
+                        thresholds[f"{cls_name}/{sub_name}"] = thr
+
+                active_tids: set[int] = set()
                 new_status: Dict[int, Dict[str, Any]] = {}
                 new_crops: Dict[int, np.ndarray] = {}
                 for r, crop in zip(results, crops):
                     tid = r["id"]
+                    active_tids.add(tid)
+                    smoothed = self._update_ema(tid, r.get("class_scores", {}))
+                    status, normal_from = self._decide_status(smoothed, thresholds)
                     new_status[tid] = {
-                        "status": r["status"],
-                        "class_scores": r.get("class_scores", {}),
-                        "normal_from": r.get("normal_from", []),
+                        "status": status,
+                        "class_scores": smoothed,
+                        "normal_from": normal_from,
                     }
                     if tid >= 0:
                         new_crops[tid] = crop
+
+                stale = [t for t in self._ema_state if t not in active_tids]
+                for t in stale:
+                    del self._ema_state[t]
+
                 with self._result_lock:
                     self._status_map = new_status
                     self._crops_map = new_crops
@@ -394,7 +442,8 @@ class VerifyPage(QWidget):
         self._applied_classes = list(self._selected_classes)
         self._btn_apply.setVisible(False)
         if self._running and self._inspector is not None:
-            self._worker = _ScoringWorker(self._inspector)
+            ema_alpha = float(getattr(self._inspector.config, "ema_alpha", 0.3))
+            self._worker = _ScoringWorker(self._inspector, ema_alpha=ema_alpha)
         QMessageBox.information(
             self, "Inspector",
             f"Reloaded with {len(self._selected_classes)} class(es).",
@@ -436,7 +485,8 @@ class VerifyPage(QWidget):
         if self._inspector is None:
             self._load_inspector()
         if self._inspector is not None and self._applied_classes:
-            self._worker = _ScoringWorker(self._inspector)
+            ema_alpha = float(getattr(self._inspector.config, "ema_alpha", 0.3))
+            self._worker = _ScoringWorker(self._inspector, ema_alpha=ema_alpha)
 
         self._running = True
         self._timer.start()
@@ -499,6 +549,7 @@ class VerifyPage(QWidget):
         ok, frame = self._cap.read()
         if not ok:
             return
+        frame = _digital_zoom(frame, zoom=1.2)
 
         count = 0
         normal_count = 0
@@ -547,10 +598,6 @@ class VerifyPage(QWidget):
                     if self._draw_mode == "bbox" and bbox:
                         x1, y1, x2, y2 = [int(v) for v in bbox]
                         cv2.rectangle(display, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(
-                            display, status, (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1,
-                        )
                     elif self._draw_mode == "center":
                         if center:
                             cx, cy = int(center[0]), int(center[1])
@@ -616,6 +663,7 @@ class VerifyPage(QWidget):
     @staticmethod
     def _cv2pixmap(img: np.ndarray, size: int) -> QPixmap:
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.ndim == 3 else img
+        rgb = np.ascontiguousarray(rgb)
         h, w = rgb.shape[:2]
         ch = 3 if rgb.ndim == 3 else 1
         fmt = (
@@ -623,7 +671,7 @@ class VerifyPage(QWidget):
             if ch == 3
             else QImage.Format.Format_Grayscale8
         )
-        qimg = QImage(rgb.data, w, h, ch * w, fmt)
+        qimg = QImage(rgb.data, w, h, ch * w, fmt).copy()
         return QPixmap.fromImage(qimg).scaled(
             size, size,
             Qt.AspectRatioMode.KeepAspectRatio,
@@ -632,8 +680,9 @@ class VerifyPage(QWidget):
 
     def _show_frame(self, frame: np.ndarray):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb = np.ascontiguousarray(rgb)
         h, w, ch = rgb.shape
-        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888)
+        qimg = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
         pix = QPixmap.fromImage(qimg)
         scaled = pix.scaled(
             self._cam_label.size(),
