@@ -19,8 +19,9 @@ def setup_cuda() -> None:
     """One-time CUDA optimizations. Call once at startup."""
     if not torch.cuda.is_available():
         return
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True, warn_only=True)
     if torch.__version__ >= "2.0":
         torch.set_float32_matmul_precision("high")
 
@@ -30,6 +31,8 @@ def setup_seed(seed: int = 42) -> None:
     import random
     import numpy as np
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
     if torch.cuda.is_available():

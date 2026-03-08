@@ -198,52 +198,52 @@ class ResNet50FeatureExtractor:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         return self.extract(Image.fromarray(rgb))
 
-    # ─────────────── Batch BGR numpy (OPTIMISED) ───────────────
+    # ─────────────── Batch BGR numpy (Old Version stable path) ───────────────
     @torch.no_grad()
     def extract_batch(self, images: List[np.ndarray]) -> List[np.ndarray]:
         """
-        Extract patches from a batch of BGR numpy arrays.
+        Batch feature extraction from BGR numpy arrays.
 
-        Optimisations vs. old path:
-          - No PIL conversion — direct NumPy→Tensor
-          - Single H2D transfer for the whole batch
-          - Resize via cv2 (INTER_LINEAR, ~2-3× faster than PIL bilinear)
-          - Color features computed in batch (no per-image loop)
-          - Async D2H via CUDA stream
+        Uses PIL preprocessing (same as single-image ``extract()``) to
+        ensure feature consistency between train and predict.  This matches
+        the Old Version pipeline exactly:
+          PIL.Image → torchvision BICUBIC resize → ToTensor → Normalize
         """
         if not images:
             return []
 
-        # ── Normalised batch for CNN ──
-        batch = self._preprocess_batch_tensor(images, normalize=True)
+        # ── PIL preprocessing (identical path to single extract) ──
+        pil_imgs = [
+            Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            for img in images
+        ]
+        batch = torch.stack(
+            [self.transform(p) for p in pil_imgs]
+        ).to(self.device)
 
-        with torch.amp.autocast("cuda", enabled=self.use_half):
-            feats = self.backbone(batch)
+        feats = self.backbone(batch)
 
         cnn = self._cnn_from_feats(feats, batch_mode=True)  # (B, P, cnn_dim)
 
         need_color = self.use_color_features or self.use_hsv
 
         if not need_color:
-            # Fast path: move all at once, split on CPU
-            stacked = cnn.cpu().numpy()                      # (B, P, D)
+            stacked = cnn.cpu().numpy()
             return [stacked[i] for i in range(stacked.shape[0])]
 
-        # ── Raw (un-normalised) batch for color ──
-        raw_batch = self._preprocess_batch_tensor(images, normalize=False)
-        color = self._color_patches_batch(raw_batch)         # (B, P, color_dim)
+        # ── Color features per-image (matches old version exactly) ──
+        raw_batch = torch.stack(
+            [self.raw_transform(p) for p in pil_imgs]
+        ).to(self.device)
 
-        combined = torch.cat([cnn, color], dim=2)            # (B, P, total_dim)
+        results: List[np.ndarray] = []
+        for i in range(len(images)):
+            cnn_i = cnn[i]                                    # (P, cnn_dim)
+            col = self._color_patches(raw_batch[i:i + 1])     # (P, color_dim)
+            out = torch.cat([cnn_i, col], dim=1)
+            results.append(out.cpu().numpy())
 
-        # Async D2H if available
-        if self._d2h_stream is not None:
-            with torch.cuda.stream(self._d2h_stream):
-                out = combined.cpu().numpy()
-            self._d2h_stream.synchronize()
-        else:
-            out = combined.cpu().numpy()
-
-        return [out[i] for i in range(out.shape[0])]
+        return results
 
     # ─────────────── CNN Patch Builder ───────────────
     def _cnn_from_feats(self, feats: dict, batch_mode: bool = False):

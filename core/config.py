@@ -59,13 +59,13 @@ class BackboneConfig:
     coreset_ratio: float       = 0.25
     coreset_min_keep: int      = 1_000
     coreset_max_keep: int      = 20_000
-    k_nearest: int             = 3
-    score_method: str          = "max"
+    k_nearest: int             = 1
+    score_method: str          = "top5_mean"
     threshold_multiplier: float = 1.0
     fallback_threshold: float  = 0.50
     use_color_features: bool   = True
     use_hsv: bool              = True
-    color_weight: float        = 1.0
+    color_weight: float        = 1.5
     n_finetune_steps: int      = 601
 
 
@@ -82,7 +82,7 @@ class TrainConfig:
     """Training global settings."""
     seed: int                  = 42
     batch_size: int            = 32
-    selected_classes: tuple    = ("Androxsil",)
+    selected_classes: tuple    = ()
 
 
 # ─────────────────────────────────────────────────────────
