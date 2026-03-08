@@ -555,8 +555,8 @@ class VerifyPage(QWidget):
         normal_count = 0
         defect_count = 0
         display = frame.copy()
-        normal_crops: list[np.ndarray] = []
-        defect_crops: list[np.ndarray] = []
+        normal_crops: list[tuple[int, np.ndarray]] = []
+        defect_crops: list[tuple[int, np.ndarray]] = []
 
         if self._inspector is not None:
             try:
@@ -586,12 +586,12 @@ class VerifyPage(QWidget):
                         defect_count += 1
                         color = (0, 0, 255)
                         if crop_img is not None:
-                            defect_crops.append(crop_img)
+                            defect_crops.append((int(tid), crop_img))
                     elif status == "NORMAL":
                         normal_count += 1
                         color = (0, 255, 0)
                         if crop_img is not None:
-                            normal_crops.append(crop_img)
+                            normal_crops.append((int(tid), crop_img))
                     else:
                         color = (200, 200, 0)
 
@@ -627,8 +627,11 @@ class VerifyPage(QWidget):
 
     # ─────────────────── pill strips ─────────────────────
     def _update_category_pills(self, normals: list, defects: list):
+        normals_sorted = sorted(normals, key=lambda x: (x[0] < 0, x[0]))
+        defects_sorted = sorted(defects, key=lambda x: (x[0] < 0, x[0]))
+
         # Normal
-        n_needed = min(len(normals), 10)
+        n_needed = len(normals_sorted)
         while len(self._normal_pool) < n_needed:
             lbl = QLabel()
             lbl.setFixedSize(60, 60)
@@ -636,7 +639,7 @@ class VerifyPage(QWidget):
             self._normal_layout.addWidget(lbl)
             self._normal_pool.append(lbl)
         for i in range(n_needed):
-            self._normal_pool[i].setPixmap(self._cv2pixmap(normals[i], 60))
+            self._normal_pool[i].setPixmap(self._cv2pixmap(normals_sorted[i][1], 60))
             if not self._normal_pool[i].isVisible():
                 self._normal_pool[i].setVisible(True)
         for i in range(n_needed, len(self._normal_pool)):
@@ -644,7 +647,7 @@ class VerifyPage(QWidget):
                 self._normal_pool[i].setVisible(False)
 
         # Defect
-        d_needed = min(len(defects), 10)
+        d_needed = len(defects_sorted)
         while len(self._defect_pool) < d_needed:
             lbl = QLabel()
             lbl.setFixedSize(60, 60)
@@ -652,7 +655,7 @@ class VerifyPage(QWidget):
             self._defect_layout.addWidget(lbl)
             self._defect_pool.append(lbl)
         for i in range(d_needed):
-            self._defect_pool[i].setPixmap(self._cv2pixmap(defects[i], 60))
+            self._defect_pool[i].setPixmap(self._cv2pixmap(defects_sorted[i][1], 60))
             if not self._defect_pool[i].isVisible():
                 self._defect_pool[i].setVisible(True)
         for i in range(d_needed, len(self._defect_pool)):
