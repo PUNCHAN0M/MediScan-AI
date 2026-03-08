@@ -312,6 +312,7 @@ class YOLODetector:
         target_size: Optional[int] = None,
         bg_value: Optional[int] = None,
         pad: Optional[int] = None,
+        include_stages: bool = False,
     ) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
         """
         Detect → crop → (optionally) track.
@@ -337,14 +338,33 @@ class YOLODetector:
             x1, y1, x2, y2 = det.bbox
             cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
 
-            infos.append({
+            x1p = max(0, x1 - self.pad)
+            y1p = max(0, y1 - self.pad)
+            x2p = min(frame.shape[1], x2 + self.pad)
+            y2p = min(frame.shape[0], y2 + self.pad)
+
+            info: Dict[str, Any] = {
                 "bbox": det.bbox,
                 "padded_region": det.bbox,
                 "conf": det.conf,
                 "class_id": det.class_id,
                 "center": (cx, cy),
                 "track_id": -1,
-            })
+            }
+            if include_stages:
+                raw = frame[y1p:y2p, x1p:x2p]
+                if raw.size > 0:
+                    info["raw_crop_before_mask"] = raw.copy()
+                    if det.mask is not None:
+                        mask_crop = det.mask[y1p:y2p, x1p:x2p]
+                        if mask_crop.size > 0:
+                            clean = self.preprocess_mask(mask_crop)
+                            morph_crop = raw.copy()
+                            morph_crop[clean == 0] = self.bg_value
+                            info["mask_after_morph"] = clean.copy()
+                            info["crop_after_morph"] = morph_crop
+
+            infos.append(info)
             crops.append(crop)
 
         if self._tracker is not None:

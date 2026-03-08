@@ -119,6 +119,8 @@ def main():
         score_method=cfg.backbone.score_method,
         batch_size=cfg.train.batch_size,
         bad_dir=bad_dir,
+        calib_bad_percentile=cfg.backbone.calib_bad_percentile,
+        calib_good_cap_percentile=cfg.backbone.calib_good_cap_percentile,
     )
 
     output_dir = cfg.paths.model_output_dir

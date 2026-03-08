@@ -301,6 +301,7 @@ class PillInspector:
     def detect_frame(
         self,
         frame: np.ndarray,
+        include_stages: bool = False,
     ) -> Tuple[List[np.ndarray], List[Dict[str, Any]]]:
         """
         Phase 1 — YOLO detection only (fast, ~20-50 ms after warmup).
@@ -308,7 +309,7 @@ class PillInspector:
         Returns (crops, infos).  Tracking state is updated here.
         **Call from the display thread** for instant bbox response.
         """
-        crops, infos = self._segmentor.detect_and_crop(frame)
+        crops, infos = self._segmentor.detect_and_crop(frame, include_stages=include_stages)
         self._last_frame = frame
         return crops, infos
 

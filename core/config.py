@@ -63,6 +63,8 @@ class BackboneConfig:
     score_method: str          = "top5_mean"
     threshold_multiplier: float = 1.0
     fallback_threshold: float  = 0.50
+    calib_bad_percentile: float = 5.0
+    calib_good_cap_percentile: float = 99.0
     use_color_features: bool   = True
     use_hsv: bool              = True
     color_weight: float        = 1.5
@@ -82,7 +84,7 @@ class TrainConfig:
     """Training global settings."""
     seed: int                  = 42
     batch_size: int            = 32
-    selected_classes: tuple    = ()
+    selected_classes: tuple    = ("Bestatin20",)
 
 
 # ─────────────────────────────────────────────────────────

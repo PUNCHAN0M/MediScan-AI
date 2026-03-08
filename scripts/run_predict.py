@@ -23,6 +23,18 @@ from pipeline.predict_pipeline import run_camera
 def main():
     parser = argparse.ArgumentParser(description="Realtime Pill Inspection")
     parser.add_argument("--classes", "-c", nargs="*", default=None)
+    parser.add_argument(
+        "--show-model-input",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show secondary 'Model Input + Score' window (default: enabled)",
+    )
+    parser.add_argument(
+        "--show-morph-stage",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="In secondary window show post-morph image (default) or raw crop",
+    )
     args = parser.parse_args()
 
     settings = SettingsManager()
@@ -43,6 +55,8 @@ def main():
         camera_index=int(settings.get("camera_index", 0)),
         save_dir=None,
         window_name="Pill Inspector",
+        show_model_input_window=bool(args.show_model_input),
+        show_morph_stage=bool(args.show_morph_stage),
     )
 
 

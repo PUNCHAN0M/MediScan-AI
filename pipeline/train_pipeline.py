@@ -26,7 +26,6 @@ import cv2
 import time
 import numpy as np
 from pathlib import Path
-from PIL import Image
 from typing import Dict, List, Optional, Tuple
 
 from core.utils import list_images_recursive
@@ -60,6 +59,8 @@ class TrainPipeline:
         score_method: str = "max",
         batch_size: int = 32,
         bad_dir: Optional[Path] = None,
+        calib_bad_percentile: float = 5.0,
+        calib_good_cap_percentile: float = 99.0,
     ):
         self.extractor = extractor
         self.coreset_ratio = coreset_ratio
@@ -69,6 +70,8 @@ class TrainPipeline:
         self.score_method = score_method
         self.batch_size = batch_size
         self.bad_dir = bad_dir
+        self.calib_bad_percentile = float(calib_bad_percentile)
+        self.calib_good_cap_percentile = float(calib_good_cap_percentile)
 
     # ═══════════════════════════════════════════════════════
     #  Public: train ALL subclasses under one parent dir
@@ -211,7 +214,7 @@ class TrainPipeline:
         )
 
         # ── Calibrate Threshold ──
-        threshold = self._calibrate(memory)
+        threshold = self._calibrate(memory, good_paths=image_paths)
 
         t_sub_elapsed = time.perf_counter() - t_sub_start
         print(f"  [Threshold] {sub_dir.name}  →  {threshold:.4f}  | total: {t_sub_elapsed:.1f}s")
@@ -225,7 +228,7 @@ class TrainPipeline:
     # ═══════════════════════════════════════════════════════
     #  Calibration (batch mode)
     # ═══════════════════════════════════════════════════════
-    def _calibrate(self, memory: np.ndarray) -> float:
+    def _calibrate(self, memory: np.ndarray, good_paths: Optional[List[Path]] = None) -> float:
         t_calib_start = time.perf_counter()
 
         if self.bad_dir is None:
@@ -286,14 +289,90 @@ class TrainPipeline:
             print(f"  [Calibrate] mode=FALLBACK  reason=all scores non-finite  value={self.fallback_threshold:.4f}")
             return self.fallback_threshold
 
-        result = float(np.percentile(arr, 5.0))
+        bad_thr = float(np.percentile(arr, self.calib_bad_percentile))
+        result = bad_thr
+        reason = [f"bad_p{self.calib_bad_percentile:g}={bad_thr:.4f}"]
+
+        # Adaptive calibration with GOOD scores (no fixed cap):
+        # 1) If distributions are separable, use midpoint between
+        #    good edge and bad edge.
+        # 2) If overlapping, use F1 sweep on good vs bad score sets.
+        if good_paths:
+            good_scores: List[float] = []
+            for i in range(0, len(good_paths), self.batch_size):
+                batch_paths = good_paths[i : i + self.batch_size]
+                batch_imgs: List[np.ndarray] = []
+                for p in batch_paths:
+                    try:
+                        bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
+                        if bgr is not None:
+                            batch_imgs.append(bgr)
+                    except Exception:
+                        continue
+
+                if not batch_imgs:
+                    continue
+
+                batch_feats = self.extractor.extract_batch(batch_imgs)
+                for patches in batch_feats:
+                    score = scorer.score_pill(patches, method=self.score_method)
+                    good_scores.append(score)
+
+            if good_scores:
+                good_arr = np.array(good_scores, dtype=np.float32)
+                good_arr = good_arr[np.isfinite(good_arr)]
+                if good_arr.size > 0:
+                    good_edge = float(np.percentile(good_arr, self.calib_good_cap_percentile))
+
+                    if good_edge < bad_thr:
+                        result = 0.5 * (good_edge + bad_thr)
+                        reason.append(
+                            f"midpoint(good_p{self.calib_good_cap_percentile:g}={good_edge:.4f},"
+                            f" bad_p{self.calib_bad_percentile:g}={bad_thr:.4f})"
+                        )
+                    else:
+                        result = self._f1_sweep(good_arr, arr, n_steps=351)
+                        reason.append("f1_sweep(good_vs_bad)")
+
+                    print(
+                        f"  [Calibrate][GOOD] scored={good_arr.size} "
+                        f"min={good_arr.min():.4f} max={good_arr.max():.4f} "
+                        f"mean={good_arr.mean():.4f} p95={np.percentile(good_arr, 95):.4f} "
+                        f"p99={np.percentile(good_arr, 99):.4f}"
+                    )
+
         t_calib_elapsed = time.perf_counter() - t_calib_start
         print(
             f"  [Calibrate] scored={len(scores)}  "
             f"min={arr.min():.4f}  max={arr.max():.4f}  mean={arr.mean():.4f}  "
-            f"p5={result:.4f}  time={t_calib_elapsed:.1f}s"
+            f"p5={bad_thr:.4f}  final={result:.4f}  "
+            f"reason={' | '.join(reason)}  time={t_calib_elapsed:.1f}s"
         )
         return result
+
+    @staticmethod
+    def _f1_sweep(good: np.ndarray, bad: np.ndarray, n_steps: int = 351) -> float:
+        all_s = np.concatenate([good, bad])
+        if all_s.size == 0:
+            return 0.5
+
+        thrs = np.unique(np.quantile(all_s, np.linspace(0.0, 1.0, n_steps)))
+        best_thr = float(thrs[0])
+        best_f1 = -1.0
+
+        for thr in thrs:
+            tp = int((bad > thr).sum())
+            fp = int((good > thr).sum())
+            fn = int(bad.size) - tp
+            prec = tp / (tp + fp) if (tp + fp) else 0.0
+            rec = tp / (tp + fn) if (tp + fn) else 0.0
+            f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thr = float(thr)
+
+        return best_thr
 
     # ═══════════════════════════════════════════════════════
     #  Helpers

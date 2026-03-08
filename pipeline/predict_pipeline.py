@@ -84,6 +84,75 @@ def save_crops(save_dir: Path, crops: dict) -> int:
     return len(crops)
 
 
+def _score_label(status_info: Optional[Dict[str, Any]]) -> str:
+    if not status_info:
+        return "SCORING"
+    scores = status_info.get("class_scores", {})
+    if not scores:
+        return status_info.get("status", "SCORING")
+    key = sorted(scores.keys())[0]
+    return f"{status_info.get('status', 'UNK')} {scores[key]:.4f}"
+
+
+def build_model_input_grid(
+    infos: List[Dict[str, Any]],
+    scored: Dict[int, Dict[str, Any]],
+    cell_size: int = 100,
+    max_cols: int = 6,
+    show_morph_stage: bool = True,
+) -> Optional[np.ndarray]:
+    if not infos:
+        return None
+
+    ordered = sorted(
+        infos,
+        key=lambda x: (int(x.get("track_id", -1) < 0), int(x.get("track_id", -1))),
+    )
+
+    n = len(ordered)
+    cols = min(max_cols, n)
+    rows = (n + cols - 1) // cols
+    label_h = 28
+    grid = np.zeros((rows * (cell_size + label_h), cols * cell_size, 3), dtype=np.uint8)
+
+    for idx, info in enumerate(ordered):
+        row, col = divmod(idx, cols)
+        y = row * (cell_size + label_h)
+        x = col * cell_size
+
+        tid = int(info.get("track_id", -1))
+        status_info = scored.get(tid)
+
+        if show_morph_stage:
+            stage_img = info.get("crop_after_morph")
+            if stage_img is None:
+                stage_img = info.get("raw_crop_before_mask")
+        else:
+            stage_img = info.get("raw_crop_before_mask")
+            if stage_img is None:
+                stage_img = info.get("crop_after_morph")
+        if stage_img is None or getattr(stage_img, "size", 0) == 0:
+            continue
+
+        cell = stage_img[:, :, :3] if stage_img.ndim == 3 and stage_img.shape[2] == 4 else stage_img
+        cell = cv2.resize(cell, (cell_size, cell_size), interpolation=cv2.INTER_LINEAR)
+        grid[y + label_h:y + label_h + cell_size, x:x + cell_size] = cell
+
+        label = f"ID:{tid} {_score_label(status_info)}"
+        cv2.putText(
+            grid,
+            label,
+            (x + 3, y + 18),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.38,
+            (220, 220, 220),
+            1,
+            cv2.LINE_AA,
+        )
+
+    return grid
+
+
 # ─────────────────────────────────────────────
 # Async Scoring Worker (background thread)
 # ─────────────────────────────────────────────
@@ -280,6 +349,8 @@ def run_camera(
     save_dir: Optional[Path] = None,
     window_name: str = "Pill Inspector",
     zoom: float = 1.2,
+    show_model_input_window: bool = True,
+    show_morph_stage: bool = True,
 ) -> None:
     """
     Run the realtime camera inspection loop.
@@ -309,6 +380,18 @@ def run_camera(
     print(f"Compare classes: {compare_classes}")
     print("Hotkeys: s=save | r=reset | Enter=summarize | q/ESC=quit\n")
 
+    has_morph = bool(getattr(inspector.detector, "mode", "segment") == "segment")
+    if has_morph:
+        print("[PreModel] Morphology exists: YES (MORPH_CLOSE + MORPH_OPEN + blur + threshold)")
+    else:
+        print("[PreModel] Morphology exists: NO (detector mode is not segmentation)")
+
+    if show_model_input_window:
+        mode_text = "AFTER morphology" if show_morph_stage else "RAW before mask"
+        print(f"[PreModel] Extra window: ON | mode={mode_text}")
+    else:
+        print("[PreModel] Extra window: OFF")
+
     worker = _ScoringWorker(inspector, compare_classes, ema_alpha=ema_alpha)
     fps_counter = FPSCounter()
 
@@ -321,7 +404,7 @@ def run_camera(
             frame = digital_zoom(frame, zoom=zoom)
 
             # ── Phase 1: synchronous YOLO detection (fast) ──
-            crops, infos = inspector.detect_frame(frame)
+            crops, infos = inspector.detect_frame(frame, include_stages=show_model_input_window)
 
             # Submit crops to background scorer (non-blocking)
             if crops:
@@ -359,6 +442,18 @@ def run_camera(
             )
 
             cv2.imshow(window_name, vis)
+
+            # ── Secondary preview: model input + score ──
+            if show_model_input_window:
+                pre_model_grid = build_model_input_grid(
+                    infos=infos,
+                    scored=scored,
+                    cell_size=100,
+                    max_cols=6,
+                    show_morph_stage=show_morph_stage,
+                )
+                if pre_model_grid is not None:
+                    cv2.imshow("Model Input + Score", pre_model_grid)
 
             # Key handling (summarize is manual-only to avoid log spam)
             key = cv2.waitKey(1) & 0xFF
