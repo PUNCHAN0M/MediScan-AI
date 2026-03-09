@@ -121,6 +121,9 @@ def main():
         bad_dir=bad_dir,
         calib_bad_percentile=cfg.backbone.calib_bad_percentile,
         calib_good_cap_percentile=cfg.backbone.calib_good_cap_percentile,
+        calib_target_bad_recall=cfg.backbone.calib_target_bad_recall,
+        calib_max_good_fpr=cfg.backbone.calib_max_good_fpr,
+        calib_beta=cfg.backbone.calib_beta,
     )
 
     output_dir = cfg.paths.model_output_dir

@@ -28,7 +28,7 @@ CONFIG = {
     "INPUT_DIR": None,
 
     # Output Directory
-    "OUTPUT_DIR": "data/vitaminc/vitaminc",
+    "OUTPUT_DIR": "data/circle_white/circle_white",
 
     # Confidence Threshold (0.0 - 1.0)
     "CONFIDENCE": 0.25,

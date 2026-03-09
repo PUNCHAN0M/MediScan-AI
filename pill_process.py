@@ -15,13 +15,13 @@ SELECTED_CLASSES: list = []  # empty = process all
 # =============================================================================
 
 ROOT_INPUT_DIR = "data"
-INPUT_MAINCLASS_DIR: Optional[str] = ['vitaminc'] #None ['black_sphere']
+INPUT_MAINCLASS_DIR: Optional[str] = [] #None ['black_sphere']
 INPUT_SUBCLASS_DIR: Optional[str] = None  #['black_sphere','brown_cap']
 
 ROOT_BACKBONE_OUTPUT_DIR = "data_train_backbone"
 ROOT_TRAIN_OUTPUT_DIR = "data_train_defection"
 
-AUGMENT_COUNT_PER_IMAGE = 5
+AUGMENT_COUNT_PER_IMAGE = 10
 DEFECTION_MIN_IMAGES = 1000
 DEFECTION_MAX_IMAGES = 1000
 BACKBONE_MIN_IMAGES = 500

@@ -11,7 +11,7 @@ from ultralytics import YOLO
 
 
 def export_onnx(
-    model_path: str = "weights/pill-detection-best.pt",
+    model_path: str = "weights/detection/pill-detection-3.pt",
     imgsz: int = 1280,
     half: bool = False,
     simplify: bool = True,
@@ -28,7 +28,7 @@ def export_onnx(
         simplify=simplify,
         opset=opset,
         dynamic=dynamic,
-        project=r"D:\project\Medicine-AI\MediScan-AI\model",
+        project="weights/detection",
         name="",
     )
 
@@ -39,7 +39,7 @@ def export_onnx(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export YOLO .pt → .onnx")
-    parser.add_argument("--model", default="weights/pill-detection-best.pt",
+    parser.add_argument("--model", default="weights/detection/pill-detection-3.pt",
                         help="Path to .pt model")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Default image size for export shape")

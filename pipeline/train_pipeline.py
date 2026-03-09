@@ -61,6 +61,9 @@ class TrainPipeline:
         bad_dir: Optional[Path] = None,
         calib_bad_percentile: float = 5.0,
         calib_good_cap_percentile: float = 99.0,
+        calib_target_bad_recall: float = 0.95,
+        calib_max_good_fpr: float = 0.03,
+        calib_beta: float = 2.0,
     ):
         self.extractor = extractor
         self.coreset_ratio = coreset_ratio
@@ -72,6 +75,9 @@ class TrainPipeline:
         self.bad_dir = bad_dir
         self.calib_bad_percentile = float(calib_bad_percentile)
         self.calib_good_cap_percentile = float(calib_good_cap_percentile)
+        self.calib_target_bad_recall = float(calib_target_bad_recall)
+        self.calib_max_good_fpr = float(calib_max_good_fpr)
+        self.calib_beta = float(calib_beta)
 
     # ═══════════════════════════════════════════════════════
     #  Public: train ALL subclasses under one parent dir
@@ -213,8 +219,14 @@ class TrainPipeline:
             seed=self.seed,
         )
 
-        # ── Calibrate Threshold ──
-        threshold = self._calibrate(memory, good_paths=image_paths)
+        # ── Calibrate Threshold (class/subclass-aware bad set) ──
+        bad_paths, bad_tag = self._resolve_bad_paths(sub_dir)
+        threshold = self._calibrate(
+            memory,
+            good_paths=image_paths,
+            bad_paths=bad_paths,
+            bad_tag=bad_tag,
+        )
 
         t_sub_elapsed = time.perf_counter() - t_sub_start
         print(f"  [Threshold] {sub_dir.name}  →  {threshold:.4f}  | total: {t_sub_elapsed:.1f}s")
@@ -228,19 +240,30 @@ class TrainPipeline:
     # ═══════════════════════════════════════════════════════
     #  Calibration (batch mode)
     # ═══════════════════════════════════════════════════════
-    def _calibrate(self, memory: np.ndarray, good_paths: Optional[List[Path]] = None) -> float:
+    def _calibrate(
+        self,
+        memory: np.ndarray,
+        good_paths: Optional[List[Path]] = None,
+        bad_paths: Optional[List[Path]] = None,
+        bad_tag: str = "global",
+    ) -> float:
         t_calib_start = time.perf_counter()
 
         if self.bad_dir is None:
             print(f"  [Calibrate] mode=FALLBACK  reason=no bad_dir  value={self.fallback_threshold:.4f}")
             return self.fallback_threshold
 
-        bad_paths = list_images_recursive(self.bad_dir)
+        if bad_paths is None:
+            bad_paths = list_images_recursive(self.bad_dir)
+            bad_tag = "global"
         if not bad_paths:
             print(f"  [Calibrate] mode=FALLBACK  reason=no images in bad_dir  value={self.fallback_threshold:.4f}")
             return self.fallback_threshold
 
-        print(f"  [Calibrate] mode=BAD_DATA  bad_images={len(bad_paths)}  bad_dir={self.bad_dir}")
+        print(
+            f"  [Calibrate] mode=BAD_DATA  bad_images={len(bad_paths)}  "
+            f"source={bad_tag}"
+        )
 
         # Use stable old-style scorer path for calibration:
         # - FlatIP index (no IVF clustering)
@@ -324,15 +347,8 @@ class TrainPipeline:
                 if good_arr.size > 0:
                     good_edge = float(np.percentile(good_arr, self.calib_good_cap_percentile))
 
-                    if good_edge < bad_thr:
-                        result = 0.5 * (good_edge + bad_thr)
-                        reason.append(
-                            f"midpoint(good_p{self.calib_good_cap_percentile:g}={good_edge:.4f},"
-                            f" bad_p{self.calib_bad_percentile:g}={bad_thr:.4f})"
-                        )
-                    else:
-                        result = self._f1_sweep(good_arr, arr, n_steps=351)
-                        reason.append("f1_sweep(good_vs_bad)")
+                    result, fit_meta = self._fit_threshold(good_arr, arr)
+                    reason.append(fit_meta)
 
                     print(
                         f"  [Calibrate][GOOD] scored={good_arr.size} "
@@ -350,29 +366,96 @@ class TrainPipeline:
         )
         return result
 
+    def _resolve_bad_paths(self, sub_dir: Path) -> Tuple[List[Path], str]:
+        """
+        Prefer bad samples that match current class/subclass, then fallback.
+
+        Priority:
+        1) bad_dir/<parent>/<subclass>
+        2) bad_dir/<parent>
+        3) bad_dir/<subclass>
+        4) all images under bad_dir
+        """
+        if self.bad_dir is None:
+            return [], "none"
+
+        parent_name = sub_dir.parent.name
+        subclass_name = sub_dir.name
+
+        candidates = [
+            (self.bad_dir / parent_name / subclass_name, f"{parent_name}/{subclass_name}"),
+            (self.bad_dir / parent_name, parent_name),
+            (self.bad_dir / subclass_name, subclass_name),
+        ]
+
+        for cand_dir, tag in candidates:
+            if cand_dir.exists() and cand_dir.is_dir():
+                imgs = list_images_recursive(cand_dir)
+                if imgs:
+                    return imgs, tag
+
+        return list_images_recursive(self.bad_dir), "global"
+
     @staticmethod
-    def _f1_sweep(good: np.ndarray, bad: np.ndarray, n_steps: int = 351) -> float:
+    def _fbeta(precision: float, recall: float, beta: float) -> float:
+        b2 = beta * beta
+        den = b2 * precision + recall
+        if den <= 0.0:
+            return 0.0
+        return (1.0 + b2) * precision * recall / den
+
+    def _fit_threshold(self, good: np.ndarray, bad: np.ndarray, n_steps: int = 401) -> Tuple[float, str]:
         all_s = np.concatenate([good, bad])
         if all_s.size == 0:
-            return 0.5
+            return 0.5, "fallback_empty_scores"
+
+        good_edge = float(np.percentile(good, self.calib_good_cap_percentile))
+        bad_edge = float(np.percentile(bad, self.calib_bad_percentile))
+
+        if good_edge < bad_edge:
+            mid = 0.5 * (good_edge + bad_edge)
+            return mid, (
+                f"midpoint(good_p{self.calib_good_cap_percentile:g}={good_edge:.4f},"
+                f" bad_p{self.calib_bad_percentile:g}={bad_edge:.4f})"
+            )
 
         thrs = np.unique(np.quantile(all_s, np.linspace(0.0, 1.0, n_steps)))
         best_thr = float(thrs[0])
-        best_f1 = -1.0
+        best_obj = -1e9
+        best_tpr = 0.0
+        best_fpr = 1.0
+        beta = max(0.1, self.calib_beta)
 
         for thr in thrs:
             tp = int((bad > thr).sum())
             fp = int((good > thr).sum())
             fn = int(bad.size) - tp
+            tn = int(good.size) - fp
+
             prec = tp / (tp + fp) if (tp + fp) else 0.0
             rec = tp / (tp + fn) if (tp + fn) else 0.0
-            f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+            fpr = fp / (fp + tn) if (fp + tn) else 1.0
 
-            if f1 > best_f1:
-                best_f1 = f1
+            fbeta = self._fbeta(prec, rec, beta)
+            youden_j = rec - fpr
+
+            # Soft constraints to avoid threshold drifting too high:
+            # - Keep high recall on bad
+            # - Keep acceptable FPR on good
+            pen_recall = max(0.0, self.calib_target_bad_recall - rec)
+            pen_fpr = max(0.0, fpr - self.calib_max_good_fpr)
+            objective = fbeta + 0.25 * youden_j - 2.0 * pen_recall - 1.0 * pen_fpr
+
+            if objective > best_obj:
+                best_obj = objective
                 best_thr = float(thr)
+                best_tpr = rec
+                best_fpr = fpr
 
-        return best_thr
+        return best_thr, (
+            f"constrained_sweep(beta={beta:g},target_recall>={self.calib_target_bad_recall:g},"
+            f"max_fpr<={self.calib_max_good_fpr:g},best_tpr={best_tpr:.3f},best_fpr={best_fpr:.3f})"
+        )
 
     # ═══════════════════════════════════════════════════════
     #  Helpers

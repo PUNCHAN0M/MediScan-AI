@@ -22,7 +22,7 @@ class PathConfig:
     bad_dir: Path              = Path("./data_bad")
     save_dir: Path             = Path("./data/inspected")
     model_output_dir: Path     = Path("./weights/patchcore_resnet")
-    segmentation_model: str    = "weights/detection/pill-detection-best-2.onnx"
+    segmentation_model: str    = "weights/detection/pill-detection-3.onnx"
     backbone: str              = "weights/backbone/resnet_last.pth"
 
 
@@ -37,7 +37,7 @@ class ImageConfig:
 class YOLOConfig:
     """YOLO detection / segmentation settings."""
     img_size: int              = 1280
-    conf: float                = 0.25
+    conf: float                = 0.1
     iou: float                 = 0.6
     pad: int                   = 5
 
@@ -65,6 +65,9 @@ class BackboneConfig:
     fallback_threshold: float  = 0.50
     calib_bad_percentile: float = 5.0
     calib_good_cap_percentile: float = 99.0
+    calib_target_bad_recall: float = 0.98
+    calib_max_good_fpr: float = 0.08
+    calib_beta: float = 2.0
     use_color_features: bool   = True
     use_hsv: bool              = True
     color_weight: float        = 1.5
@@ -84,7 +87,7 @@ class TrainConfig:
     """Training global settings."""
     seed: int                  = 42
     batch_size: int            = 32
-    selected_classes: tuple    = ()
+    selected_classes: tuple    = ("termeric",)
 
 
 # ─────────────────────────────────────────────────────────
