@@ -39,7 +39,7 @@ def export_onnx(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export YOLO .pt → .onnx")
-    parser.add_argument("--model", default="weights/detection/pill-detection-3.pt",
+    parser.add_argument("--model", default="weights/detection/best.pt",
                         help="Path to .pt model")
     parser.add_argument("--imgsz", type=int, default=1280,
                         help="Default image size for export shape")

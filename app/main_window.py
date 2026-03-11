@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 
 from app.settings_manager import SettingsManager
 from app.pages.page_verify import VerifyPage
+from app.pages.page_dataset import DatasetPage
 from app.pages.page_settings import SettingsPage
 
 
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self._tab_bar = QTabBar()
         self._tab_bar.setExpanding(False)
         self._tab_bar.addTab("Verify")
+        self._tab_bar.addTab("Dataset")
         self._tab_bar.addTab("Setting")
         self._tab_bar.setStyleSheet(f"""
             QTabBar::tab {{
@@ -86,14 +88,20 @@ class MainWindow(QMainWindow):
         # ── Pages ────────────────────────────────────────
         self._stack = QStackedWidget()
         self._verify_page = VerifyPage(self._settings)
+        self._dataset_page = DatasetPage(self._settings)
         self._settings_page = SettingsPage(self._settings)
 
         self._stack.addWidget(self._verify_page)
+        self._stack.addWidget(self._dataset_page)
         self._stack.addWidget(self._settings_page)
         root_lay.addWidget(self._stack)
 
         self._tab_bar.currentChanged.connect(self._switch_page)
         self._settings_page.settings_saved.connect(self._refresh_theme)
+
+        # ── Camera mutex: only one page may use the camera ──
+        self._verify_page.camera_started.connect(self._dataset_page.force_stop_camera)
+        self._dataset_page.camera_started.connect(self._verify_page.force_stop_camera)
 
     def _apply_global_style(self, bg: str, text: str):
         self.setStyleSheet(f"""
@@ -171,4 +179,5 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self._verify_page.cleanup()
+        self._dataset_page.cleanup()
         super().closeEvent(event)

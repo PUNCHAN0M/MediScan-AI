@@ -23,7 +23,7 @@ import numpy as np
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton,
@@ -178,6 +178,9 @@ class _ScoringWorker:
 # ─────────────────────────────────────────────
 class VerifyPage(QWidget):
     """Realtime pill anomaly verification page."""
+
+    camera_started = pyqtSignal()
+    camera_stopped = pyqtSignal()
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
@@ -490,6 +493,7 @@ class VerifyPage(QWidget):
 
         self._running = True
         self._timer.start()
+        self.camera_started.emit()
 
     def _stop(self):
         self._timer.stop()
@@ -512,6 +516,16 @@ class VerifyPage(QWidget):
             lbl.setVisible(False)
         for lbl in self._defect_pool:
             lbl.setVisible(False)
+        self.camera_stopped.emit()
+
+    @property
+    def is_camera_running(self) -> bool:
+        return self._running
+
+    def force_stop_camera(self):
+        """Called externally to release camera for another page."""
+        if self._running:
+            self._btn_toggle_cam.setChecked(False)  # triggers _toggle_camera(False)
 
     # ─────────────────── inspector ───────────────────────
     def _load_inspector(self):

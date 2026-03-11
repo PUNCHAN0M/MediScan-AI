@@ -22,7 +22,7 @@ class PathConfig:
     bad_dir: Path              = Path("./data_bad")
     save_dir: Path             = Path("./data/inspected")
     model_output_dir: Path     = Path("./weights/patchcore_resnet")
-    segmentation_model: str    = "weights/detection/pill-detection-3.onnx"
+    segmentation_model: str    = "weights/detection/pill-detection-2.onnx"
     backbone: str              = "weights/backbone/resnet_last.pth"
 
 
